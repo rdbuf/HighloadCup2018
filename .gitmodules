@@ -1,0 +1,9 @@
+[submodule "third-party/array-hash"]
+	path = third-party/array-hash
+	url = https://github.com/Tessil/array-hash.git
+[submodule "third-party/PEGTL"]
+	path = third-party/PEGTL
+	url = https://github.com/taocpp/PEGTL.git
+[submodule "third-party/fmt"]
+	path = third-party/fmt
+	url = https://github.com/fmtlib/fmt.git
