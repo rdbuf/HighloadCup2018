@@ -11,6 +11,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 - [ ] Request parsing
 - [ ] JSON parsing
 - [ ] JSON printing
+- [ ] Asio setup
 
 ### Assumptions
 - Names only contain cyrillic symbols
