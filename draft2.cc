@@ -92,24 +92,39 @@ namespace query_grammar {
 	struct action : pegtl::nothing<Rule> {};
 }
 
-template<class T>
+#include <vector>
+template<class T, class Comparator = std::less<T>>
 struct set {
-	bool universe;
-	std::vector<Id> elements;
+	std::vector<T> elements;
+	bool universe = false;
+	Comparator cmp;
+
+    set(std::initializer_list<T> il) : elements(il.begin(), il.end()) {}
+	set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
 
 	set& intersect(const set<T>& rhs) noexcept {
 		if (universe) { *this = rhs; }
 		else {
 			auto left_it = rhs.elements.begin(), right_it = rhs.elements.end();
-			const auto removed_range_begin = std::remove_if(elements.begin(), elements.end(), [&left_it, &right_it](const T& x) {
-				left_it = std::lower_bound(left_it, right_it, x);
-				return *left_it == x;
+			const auto removed_range_begin = std::remove_if(elements.begin(), elements.end(), [&left_it, &right_it, this](const T& x) {
+				left_it = std::lower_bound(left_it, right_it, x, cmp);
+				bool result = *left_it != x;
+				return result;
 			});
 			elements.resize(removed_range_begin - elements.begin());
 		}
 		return *this;
 	}
-	set& insert(T value) { elements.insert(std::upper_bound(elements.begin(), elements.end(), value), value); return *this; }
+	set& insert(T value) { elements.insert(std::upper_bound(elements.begin(), elements.end(), value, cmp), value); return *this; }
+	set& unite(const set<T>& rhs) noexcept {
+		elements.reserve(elements.size() + rhs.elements.size());
+		auto left_it = elements.begin();
+		for (auto it = rhs.elements.begin(); it != rhs.elements.end(); ++it) {
+			left_it = std::lower_bound(left_it, elements.end(), *it, cmp);
+			if (left_it == elements.end() || *left_it != *it) elements.insert(left_it, *it);
+		}
+		return *this;
+	}
 };
 
 #include <cstdint>
