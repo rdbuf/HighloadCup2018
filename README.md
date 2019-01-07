@@ -7,7 +7,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 ## Overview
 
 ### Roadmap
-- [ ] Indices
+- [x] Indices
 - [ ] Request parsing
 - [ ] JSON parsing
 - [ ] JSON printing
