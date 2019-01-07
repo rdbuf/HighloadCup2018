@@ -6,6 +6,11 @@ Rules: https://highloadcup.ru/ru/round/4/
 
 ## Overview
 
+### Roadmap
+- [ ] Request parsing
+- [ ] JSON parsing
+- [ ] JSON printing
+
 ### Assumptions
 - Names only contain cyrillic symbols
 - Overall, there are only cyrillic and ascii characters present
