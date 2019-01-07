@@ -11,7 +11,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 - Overall, there are only cyrillic and ascii characters present
 - Time is static
 
-### 0. Imaginary database schema
+### Imaginary database schema
 ```
 CREATE TYPE sex_t AS ENUM ('f', 'm');
 CREATE TYPE like_t AS (id INTEGER, ts timestamp);
@@ -33,7 +33,8 @@ CREATE TABLE Accounts (
 );
 ```
 
-### 1. Filter
+### Requests
+#### 1. Filter
 Implemented as set intersections and unions with help from binsearch
 
 ```
@@ -56,13 +57,13 @@ PremiumPresent -> SetId
 Id -> Account
 ```
 
-### 2. Group
+#### 2. Group
 Naive combinatorial enumeration, then stable_partition + stable_sort
 
-### 3. Recommend
+#### 3. Recommend
 nth_element + sort
 
-### 4. Suggest
+#### 4. Suggest
 Naive combinatorial enumeration, then stable_partition + stable_sort
 
 ```
