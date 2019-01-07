@@ -9,9 +9,9 @@
 /* Definition of domain specific types */
 
 #include <string_view>
-template<size_t N>
-struct str2byte { // unsafe fixed-width string without boundary checks
-	char str[N*2];
+template<size_t Len, size_t BytesPerSymbol>
+struct fixwstr { // unsafe fixed-width string without boundary checks
+	char str[Len*BytesPerSymbol];
 	char* ptr = str;
 
 	operator std::string_view() { return std::string_view(str, ptr - str); }
@@ -23,22 +23,22 @@ struct str2byte { // unsafe fixed-width string without boundary checks
 
 	size_t size() const noexcept { return ptr - str; }
 
-	str2byte& operator+=(char a) noexcept { *ptr++ = a; return *this; }
-	str2byte& operator+=(const char* a) noexcept {
+	fixwstr& operator+=(char a) noexcept { *ptr++ = a; return *this; }
+	fixwstr& operator+=(const char* a) noexcept {
 		const int sz = std::strlen(a);
 		std::memcpy(ptr, a, sz);
 		ptr += sz;
         return *this;
 	}
-	str2byte& from(const char* a, size_t sz) noexcept {
+	fixwstr& from(const char* a, size_t sz) noexcept {
 		std::memcpy(ptr, a, sz);
 		ptr += sz;
         return *this;
 	}
 
-	str2byte& operator-=(int n) noexcept { ptr -= n; return *this; }
+	fixwstr& operator-=(int n) noexcept { ptr -= n; return *this; }
 
-	str2byte& ensure_zero() noexcept { *ptr = 0; return *this; }
+	fixwstr& ensure_zero() noexcept { *ptr = 0; return *this; }
     operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(str); }
 };
 
@@ -46,20 +46,75 @@ using Id = uint32_t;
 using EpochSecs = int64_t;
 enum sex_t { male, female };
 enum status_t { single, relationship, undecided };
-using email_t = str2byte<100>;
-using domain_t = str2byte<100>;
-using name_t = str2byte<50>;
+using email_t = fixwstr<100, 1>;
+using domain_t = fixwstr<100, 1>;
+using name_t = fixwstr<50, 2>;
 using phone_t = uint64_t;
-using country_t = str2byte<50>;
-using city_t = str2byte<50>;
-using interest_t = str2byte<100>;
+using country_t = fixwstr<50, 2>;
+using city_t = fixwstr<50, 2>;
+using interest_t = fixwstr<100, 2>;
+
+#include <vector>
+template<class T>
+struct set {
+	std::vector<T> elements;
+	bool universe = false;
+
+	set() = default;
+    set(std::initializer_list<T> il) : elements(il.begin(), il.end()) {}
+	set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
+
+	set& intersect(const set<T>& rhs) noexcept {
+		if (universe) { *this = rhs; }
+		else {
+			auto left_it = rhs.elements.begin(), right_it = rhs.elements.end();
+			const auto removed_range_begin = std::remove_if(elements.begin(), elements.end(), [&left_it, &right_it, this](const T& x) {
+				left_it = std::lower_bound(left_it, right_it, x);
+				bool result = *left_it != x;
+				return result;
+			});
+			elements.resize(removed_range_begin - elements.begin());
+		}
+		return *this;
+	}
+	set& unsafe_insert(T value) noexcept {
+		elements.insert(std::upper_bound(elements.begin(), elements.end(), value), value); return *this;
+	}
+	set& ensure_guarantees() {
+		std::sort(elements.begin(), elements.end());
+		elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
+		return *this;
+	}
+	set& unite(const set<T>& rhs) noexcept {
+		elements.reserve(elements.size() + rhs.elements.size());
+		auto left_it = elements.begin();
+		for (auto it = rhs.elements.begin(); it != rhs.elements.end(); ++it) {
+			left_it = std::lower_bound(left_it, elements.end(), *it);
+			if (left_it == elements.end() || *left_it != *it) elements.insert(left_it, *it);
+		}
+		return *this;
+	}
+};
+
+
+#include "tsl/array_set.h"
+// #include "tsl/hopscotch_set.h"
+tsl::array_set<char> fnames;
+tsl::array_set<char> snames;
+tsl::array_set<char> countries;
+tsl::array_set<char> cities;
+tsl::array_set<char> interests;
+
+using Hash = size_t;
 
 #include <optional>
-struct Account {
+#include <string_view>
+struct Account { // size: 784 -> 368 -> 272
 	email_t email;
-	std::optional<name_t> fname, sname;
-	std::optional<country_t> country;
-	std::optional<city_t> city;
+	set<Hash> interests;
+	std::optional<Hash> fname_hash, sname_hash;
+	std::optional<Hash> country_hash;
+	std::optional<Hash> city_hash;
 	std::optional<phone_t> phone;
 	EpochSecs birth, joined, premium_beg, premium_end;
 	Id id;
@@ -77,52 +132,9 @@ struct Like {
 	Like& operator+=(Like rhs) noexcept { net_ts += rhs.net_ts; num_tss += rhs.num_tss; return *this; }
 };
 
-#include <vector>
-template<class T, class Comparator = std::less<T>>
-struct set {
-	std::vector<T> elements;
-	bool universe = false;
-	Comparator cmp;
-
-	set() = default;
-    set(std::initializer_list<T> il) : elements(il.begin(), il.end()) {}
-	set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
-
-	set& intersect(const set<T>& rhs) noexcept {
-		if (universe) { *this = rhs; }
-		else {
-			auto left_it = rhs.elements.begin(), right_it = rhs.elements.end();
-			const auto removed_range_begin = std::remove_if(elements.begin(), elements.end(), [&left_it, &right_it, this](const T& x) {
-				left_it = std::lower_bound(left_it, right_it, x, cmp);
-				bool result = *left_it != x;
-				return result;
-			});
-			elements.resize(removed_range_begin - elements.begin());
-		}
-		return *this;
-	}
-	set& unsafe_insert(T value) noexcept {
-		elements.insert(std::upper_bound(elements.begin(), elements.end(), value, cmp), value); return *this;
-	}
-	set& ensure_guarantees() {
-		std::sort(elements.begin(), elements.end(), cmp);
-		elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
-		return *this;
-	}
-	set& unite(const set<T>& rhs) noexcept {
-		elements.reserve(elements.size() + rhs.elements.size());
-		auto left_it = elements.begin();
-		for (auto it = rhs.elements.begin(); it != rhs.elements.end(); ++it) {
-			left_it = std::lower_bound(left_it, elements.end(), *it, cmp);
-			if (left_it == elements.end() || *left_it != *it) elements.insert(left_it, *it);
-		}
-		return *this;
-	}
-};
-
 template<>
 set<Like>& set<Like>::ensure_guarantees() {
-	std::sort(elements.begin(), elements.end(), cmp);
+	std::sort(elements.begin(), elements.end());
 	auto it1 = elements.begin(); const auto it2 = elements.end();
 	while (it1 != it2) {
 		auto r = std::equal_range(it1, it2, *it1).second;
@@ -159,11 +171,16 @@ std::array<set<Id>, 2> ids_by_premium_presence;
 std::vector<Account> accounts_by_id; // ids are considered contiguous
 std::vector<set<Like>> likes_by_id;
 
+#include <iostream>
+int main() {
+	std::cout << (sizeof(Account) + (16 + 36)) * 1600000 / 1e6 << " MB\n";
+}
+
 /* Helpers for parsing */
 
+#include <cstdint>
+#include <cstddef>
 namespace intparsing {
-	#include <cstdint>
-	#include <cstddef>
 	template<unsigned char base>
 	constexpr uint8_t from_digit(char d) {
 		uint8_t result = d - '0';
@@ -209,6 +226,7 @@ namespace intparsing {
    // all the per-symbol decoding is to be done via parser actions
 }
 
+/* Parsers */
 /*
 namespace data_grammar {
 	namespace pegtl = tao::pegtl::utf8;
@@ -220,6 +238,9 @@ namespace data_grammar {
 	struct list; //
 	struct account; // action: add to indices
 	struct file;
+
+	Id id; // to be grabbed
+	Account; // to be filled
 
 }
 
