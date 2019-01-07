@@ -7,3 +7,6 @@
 [submodule "third-party/fmt"]
 	path = third-party/fmt
 	url = https://github.com/fmtlib/fmt.git
+[submodule "third-party/hat-trie"]
+	path = third-party/hat-trie
+	url = https://github.com/Tessil/hat-trie.git
