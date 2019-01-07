@@ -7,6 +7,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 ## Overview
 
 ### Roadmap
+- [ ] Indices
 - [ ] Request parsing
 - [ ] JSON parsing
 - [ ] JSON printing
@@ -45,7 +46,7 @@ Implemented as set intersections and unions with help from binsearch
 ```
 Sex -> Set Id
 Domain -> Set Id
-Set (Email -> Set Id)
+Set Id -- sorted by email
 Status -> Set Id
 Fname -> Set Id
 Set (Sname -> Set Id) -- maybe a prefix tree
@@ -53,7 +54,7 @@ PhoneCode -> Set Id
 PhonePresent -> Set Id
 Country -> Set Id
 City -> Set Id
-Set Id ordered by birth
+Set Id -- sorted by birth
 Interest -> Set Id
 Id -> Set Id -- liked by
 PremiumNow -> Set Id
