@@ -176,7 +176,21 @@ constexpr std::array<char, num_digits> showint(uint64_t value) {
 
 /* Define indices */
 #include "tsl/array_map"
-std::array<set<Id>, 2> sex; // to be accessed via sex_t
-// std::unordered_map<domain_t, set<Id>> ids_by_domain;
+#include "tsl/htrie_set.h"
+std::array<set<Id>, 2> ids_by_sex; // to be accessed via sex_t
 tsl::array_map<char, set<Id>> ids_by_domain; // to be used with insert_ks
-std::map<email_t, set<Id>>
+std::vector<Id> ids_sorted_by_email;
+std::array<set<Id>, 3> ids_by_status; // to be accessed via status_t
+tsl::array_map<char, set<Id>> ids_by_fname;
+tsl::htrie_map<char, set<Id>> ids_by_sname;
+std::unordered_map<uint16_t, set<Id>> ids_by_code;
+std::array<set<Id>, 2> ids_by_code_presence; // to be accessed via presence_t
+tsl::array_map<char, set<Id>> ids_by_country;
+tsl::array_map<char, set<Id>> ids_by_city;
+std::vector<Id> ids_sorted_by_birth;
+tsl::array_map<char, set<Id>> ids_by_interest;
+std::unordered_map<Id, Set<Id>> liked_ids_by_id;
+std::array<Set<Id>, 2> ids_by_premium_now;
+std::array<Set<Id>, 2> ids_by_premium_presence;
+std::vector<Account> accounts_by_id; // ids are considered contiguous
+std::vector<set<Like, LikeCmp>> likes_by_id;
