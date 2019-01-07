@@ -16,6 +16,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 - Names only contain cyrillic symbols
 - Overall, there are only cyrillic and ascii characters present
 - Time is static
+- Ids are contiguous
 
 ### Imaginary database schema
 ```
