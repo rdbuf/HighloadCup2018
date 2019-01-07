@@ -6,11 +6,9 @@
 #define FMT_STRING_ALIAS 1
 #include <fmt/format.h>
 
-#include <iostream>
-#include <optional>
-#include <string_view>
-#include <array>
+/* Definition of domain specific types */
 
+#include <string_view>
 template<size_t N>
 struct str2byte { // unsafe fixed-width string without boundary checks
 	char str[N*2];
@@ -44,7 +42,6 @@ struct str2byte { // unsafe fixed-width string without boundary checks
     operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(str); }
 };
 
-/* Define domain specific types */
 using Id = uint32_t;
 using EpochSecs = int64_t;
 enum sex_t { male, female };
@@ -57,6 +54,7 @@ using country_t = str2byte<50>;
 using city_t = str2byte<50>;
 using interest_t = str2byte<100>;
 
+#include <optional>
 struct Account {
 	email_t email;
 	std::optional<name_t> fname, sname;
@@ -78,6 +76,138 @@ struct Like {
 	bool operator==(Like rhs) const noexcept { return other == rhs.other; }
 	Like& operator+=(Like rhs) noexcept { net_ts += rhs.net_ts; num_tss += rhs.num_tss; return *this; }
 };
+
+#include <vector>
+template<class T, class Comparator = std::less<T>>
+struct set {
+	std::vector<T> elements;
+	bool universe = false;
+	Comparator cmp;
+
+	set() = default;
+    set(std::initializer_list<T> il) : elements(il.begin(), il.end()) {}
+	set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
+
+	set& intersect(const set<T>& rhs) noexcept {
+		if (universe) { *this = rhs; }
+		else {
+			auto left_it = rhs.elements.begin(), right_it = rhs.elements.end();
+			const auto removed_range_begin = std::remove_if(elements.begin(), elements.end(), [&left_it, &right_it, this](const T& x) {
+				left_it = std::lower_bound(left_it, right_it, x, cmp);
+				bool result = *left_it != x;
+				return result;
+			});
+			elements.resize(removed_range_begin - elements.begin());
+		}
+		return *this;
+	}
+	set& unsafe_insert(T value) noexcept {
+		elements.insert(std::upper_bound(elements.begin(), elements.end(), value, cmp), value); return *this;
+	}
+	set& ensure_guarantees() {
+		std::sort(elements.begin(), elements.end(), cmp);
+		elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
+		return *this;
+	}
+	set& unite(const set<T>& rhs) noexcept {
+		elements.reserve(elements.size() + rhs.elements.size());
+		auto left_it = elements.begin();
+		for (auto it = rhs.elements.begin(); it != rhs.elements.end(); ++it) {
+			left_it = std::lower_bound(left_it, elements.end(), *it, cmp);
+			if (left_it == elements.end() || *left_it != *it) elements.insert(left_it, *it);
+		}
+		return *this;
+	}
+};
+
+template<>
+set<Like>& set<Like>::ensure_guarantees() {
+	std::sort(elements.begin(), elements.end(), cmp);
+	auto it1 = elements.begin(); const auto it2 = elements.end();
+	while (it1 != it2) {
+		auto r = std::equal_range(it1, it2, *it1).second;
+		for (auto inner_it = it1 + 1; inner_it != r; ++inner_it) {
+			*it1 += *inner_it;
+			inner_it->other = 0;
+		}
+		elements.erase(std::remove(elements.begin(), elements.end(), Like{0, 0, 0}), elements.end());
+		it1 = r;
+	}
+	return *this;
+}
+
+/* Definition of indices */
+
+#include "tsl/array_map.h"
+#include "tsl/htrie_map.h"
+#include <unordered_map>
+std::array<set<Id>, 2> ids_by_sex; // to be accessed via sex_t
+tsl::array_map<char, set<Id>> ids_by_domain; // to be used with insert_ks
+std::vector<Id> ids_sorted_by_email;
+std::array<set<Id>, 3> ids_by_status; // to be accessed via status_t
+tsl::array_map<char, set<Id>> ids_by_fname;
+tsl::htrie_map<char, set<Id>> ids_by_sname;
+std::unordered_map<uint16_t, set<Id>> ids_by_code;
+std::array<set<Id>, 2> ids_by_code_presence; // to be accessed via presence_t
+tsl::array_map<char, set<Id>> ids_by_country;
+tsl::array_map<char, set<Id>> ids_by_city;
+std::vector<Id> ids_sorted_by_birth;
+tsl::array_map<char, set<Id>> ids_by_interest;
+std::unordered_map<Id, set<Id>> liked_ids_by_id;
+std::array<set<Id>, 2> ids_by_premium_now;
+std::array<set<Id>, 2> ids_by_premium_presence;
+std::vector<Account> accounts_by_id; // ids are considered contiguous
+std::vector<set<Like>> likes_by_id;
+
+/* Helpers for parsing */
+
+namespace intparsing {
+	#include <cstdint>
+	#include <cstddef>
+	template<unsigned char base>
+	constexpr uint8_t from_digit(char d) {
+		uint8_t result = d - '0';
+		if constexpr (base > 10) {
+			if (result >= base) result -= ('A' - '0'), result += 10;
+			if (result >= base) result -= ('a' - 'A');
+		}
+		return result;
+	}
+
+	template<unsigned char base, bool upper = false>
+	constexpr char to_digit(uint8_t d) {
+		char result = d + '0';
+		if constexpr (base > 10) {
+			if (result > '9') {
+				result -= 10;
+				if constexpr (upper) result += ('A' - '0');
+				else result += ('a' - '0');
+			}
+		}
+		return result;
+	}
+
+	constexpr int64_t pow(int64_t a, int64_t b) {
+		if (b == 0) return 1;
+		return a * intparsing::pow(a, b - 1);
+	}
+
+	template<size_t num_digits, unsigned char base>
+	constexpr uint64_t readint(const char* sym) {
+		uint64_t result = 0;
+		for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * intparsing::pow(16, i);
+		return result;
+	}
+
+	#include <array>
+	template<size_t num_digits, unsigned char base>
+	constexpr std::array<char, num_digits> showint(uint64_t value) {
+		std::array<char, num_digits> result;
+		for (int i = 0; i < num_digits; ++i) result[i] = to_digit<base>((value / intparsing::pow(base, num_digits-1 - i)) % base);
+		return result;
+	}
+   // all the per-symbol decoding is to be done via parser actions
+}
 
 /*
 namespace data_grammar {
@@ -179,133 +309,3 @@ namespace query_grammar {
 	struct action : pegtl::nothing<Rule> {};
 }
 */
-
-#include <vector>
-template<class T, class Comparator = std::less<T>>
-struct set {
-	std::vector<T> elements;
-	bool universe = false;
-	Comparator cmp;
-
-	set() = default;
-    set(std::initializer_list<T> il) : elements(il.begin(), il.end()) {}
-	set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
-
-	set& intersect(const set<T>& rhs) noexcept {
-		if (universe) { *this = rhs; }
-		else {
-			auto left_it = rhs.elements.begin(), right_it = rhs.elements.end();
-			const auto removed_range_begin = std::remove_if(elements.begin(), elements.end(), [&left_it, &right_it, this](const T& x) {
-				left_it = std::lower_bound(left_it, right_it, x, cmp);
-				bool result = *left_it != x;
-				return result;
-			});
-			elements.resize(removed_range_begin - elements.begin());
-		}
-		return *this;
-	}
-	set& unsafe_insert(T value) noexcept {
-		elements.insert(std::upper_bound(elements.begin(), elements.end(), value, cmp), value); return *this;
-	}
-	set& ensure_guarantees() {
-		std::sort(elements.begin(), elements.end(), cmp);
-		elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
-		return *this;
-	}
-	set& unite(const set<T>& rhs) noexcept {
-		elements.reserve(elements.size() + rhs.elements.size());
-		auto left_it = elements.begin();
-		for (auto it = rhs.elements.begin(); it != rhs.elements.end(); ++it) {
-			left_it = std::lower_bound(left_it, elements.end(), *it, cmp);
-			if (left_it == elements.end() || *left_it != *it) elements.insert(left_it, *it);
-		}
-		return *this;
-	}
-};
-
-template<>
-set<Like>& set<Like>::ensure_guarantees() {
-	std::sort(elements.begin(), elements.end(), cmp);
-	auto it1 = elements.begin(); const auto it2 = elements.end();
-	while (it1 != it2) {
-		auto r = std::equal_range(it1, it2, *it1).second;
-		for (auto inner_it = it1 + 1; inner_it != r; ++inner_it) {
-			*it1 += *inner_it;
-			inner_it->other = 0;
-		}
-		elements.erase(std::remove(elements.begin(), elements.end(), Like{0, 0, 0}), elements.end());
-		it1 = r;
-	}
-	return *this;
-}
-
-namespace intparsing {
-	#include <cstdint>
-	#include <cstddef>
-	template<unsigned char base>
-	constexpr uint8_t from_digit(char d) {
-		uint8_t result = d - '0';
-		if constexpr (base > 10) {
-			if (result >= base) result -= ('A' - '0'), result += 10;
-			if (result >= base) result -= ('a' - 'A');
-		}
-		return result;
-	}
-
-	template<unsigned char base, bool upper = false>
-	constexpr char to_digit(uint8_t d) {
-		char result = d + '0';
-		if constexpr (base > 10) {
-			if (result > '9') {
-				result -= 10;
-				if constexpr (upper) result += ('A' - '0');
-				else result += ('a' - '0');
-			}
-		}
-		return result;
-	}
-
-	constexpr int64_t pow(int64_t a, int64_t b) {
-		if (b == 0) return 1;
-		return a * intparsing::pow(a, b - 1);
-	}
-
-	template<size_t num_digits, unsigned char base>
-	constexpr uint64_t readint(const char* sym) {
-		uint64_t result = 0;
-		for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * intparsing::pow(16, i);
-		return result;
-	}
-
-	#include <array>
-	template<size_t num_digits, unsigned char base>
-	constexpr std::array<char, num_digits> showint(uint64_t value) {
-		std::array<char, num_digits> result;
-		for (int i = 0; i < num_digits; ++i) result[i] = to_digit<base>((value / intparsing::pow(base, num_digits-1 - i)) % base);
-		return result;
-	}
-}
-
-// all the per-symbol decoding is to be done via parser actions
-
-/* Define indices */
-#include "tsl/array_map.h"
-#include "tsl/htrie_map.h"
-#include <unordered_map>
-std::array<set<Id>, 2> ids_by_sex; // to be accessed via sex_t
-tsl::array_map<char, set<Id>> ids_by_domain; // to be used with insert_ks
-std::vector<Id> ids_sorted_by_email;
-std::array<set<Id>, 3> ids_by_status; // to be accessed via status_t
-tsl::array_map<char, set<Id>> ids_by_fname;
-tsl::htrie_map<char, set<Id>> ids_by_sname;
-std::unordered_map<uint16_t, set<Id>> ids_by_code;
-std::array<set<Id>, 2> ids_by_code_presence; // to be accessed via presence_t
-tsl::array_map<char, set<Id>> ids_by_country;
-tsl::array_map<char, set<Id>> ids_by_city;
-std::vector<Id> ids_sorted_by_birth;
-tsl::array_map<char, set<Id>> ids_by_interest;
-std::unordered_map<Id, set<Id>> liked_ids_by_id;
-std::array<set<Id>, 2> ids_by_premium_now;
-std::array<set<Id>, 2> ids_by_premium_presence;
-std::vector<Account> accounts_by_id; // ids are considered contiguous
-std::vector<set<Like>> likes_by_id;
