@@ -6,8 +6,78 @@
 #define FMT_STRING_ALIAS 1
 #include <fmt/format.h>
 
-namespace query_grammar {
+#include <iostream>
+#include <optional>
+#include <string_view>
+#include <array>
+
+template<size_t N>
+struct str2byte { // unsafe fixed-width string without boundary checks
+	std::array<char, N*2> str;
+	char* ptr = &str[0];
+
+	operator std::string_view() { return std::string_view(&str[0]); }
+
+	char* begin() noexcept { return &str[0]; }
+	char* end() noexcept { return ptr; }
+	const char* begin() const noexcept { return &str[0]; }
+	const char* end() const noexcept { return ptr; }
+
+	size_t size() const noexcept { return ptr - &str[0]; }
+
+	str2byte& operator+=(char a) noexcept { *ptr++ = a; return *this; }
+	str2byte& operator+=(const char* a) noexcept {
+		const int sz = std::strlen(a);
+		std::memcpy(ptr, a, sz);
+		ptr += sz;
+        return *this;
+	}
+	str2byte& operator-=(int n) noexcept { ptr -= n; return *this; }
+
+	str2byte& ensure_zero() noexcept { *ptr = 0; return *this; }
+    operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(&str[0]); }
+};
+
+/* Define domain specific types */
+using Id = uint32_t;
+using EpochSecs = int64_t;
+enum sex_t { male, female };
+enum status_t { single, relationship, undecided };
+using email_t = str2byte<100>;
+using domain_t = str2byte<100>;
+using name_t = str2byte<50>;
+using phone_t = uint64_t;
+using country_t = str2byte<50>;
+using city_t = str2byte<50>;
+using interest_t = str2byte<100>;
+
+struct Account {
+	email_t email;
+	std::optional<name_t> fname, sname;
+	std::optional<country_t> country;
+	std::optional<city_t> city;
+	std::optional<phone_t> phone;
+	EpochSecs birth, joined, premium_beg, premium_end;
+	Id id;
+	status_t status;
+	sex_t sex;
+};
+
+namespace data_grammar {
 	namespace pegtl = tao::pegtl::utf8;
+
+	struct wss : pegtl::star<pegtl::one<' '>> {};
+	template<class Rule>
+	struct cons_wss : pegtl::seq<Rule, wss> {};
+
+	struct list; //
+	struct account; // action: add to indices
+	struct file;
+
+}
+
+namespace query_grammar {
+	namespace pegtl = tao::pegtl::ascii;
 
 	// std::vector<std::string_view> column_names;
 	// std::vector<string_with_hole> query;
