@@ -13,17 +13,17 @@
 
 template<size_t N>
 struct str2byte { // unsafe fixed-width string without boundary checks
-	std::array<char, N*2> str;
-	char* ptr = &str[0];
+	char str[N*2];
+	char* ptr = str;
 
-	operator std::string_view() { return std::string_view(&str[0]); }
+	operator std::string_view() { return std::string_view(str, ptr - str); }
 
-	char* begin() noexcept { return &str[0]; }
+	char* begin() noexcept { return str; }
 	char* end() noexcept { return ptr; }
-	const char* begin() const noexcept { return &str[0]; }
+	const char* begin() const noexcept { return str; }
 	const char* end() const noexcept { return ptr; }
 
-	size_t size() const noexcept { return ptr - &str[0]; }
+	size_t size() const noexcept { return ptr - str; }
 
 	str2byte& operator+=(char a) noexcept { *ptr++ = a; return *this; }
 	str2byte& operator+=(const char* a) noexcept {
@@ -32,10 +32,16 @@ struct str2byte { // unsafe fixed-width string without boundary checks
 		ptr += sz;
         return *this;
 	}
+	str2byte& from(const char* a, size_t sz) noexcept {
+		std::memcpy(ptr, a, sz);
+		ptr += sz;
+        return *this;
+	}
+
 	str2byte& operator-=(int n) noexcept { ptr -= n; return *this; }
 
 	str2byte& ensure_zero() noexcept { *ptr = 0; return *this; }
-    operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(&str[0]); }
+    operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(str); }
 };
 
 /* Define domain specific types */
@@ -63,6 +69,17 @@ struct Account {
 	sex_t sex;
 };
 
+struct Like {
+	Id other;
+	__int128_t net_ts;
+	int64_t num_tss;
+
+	bool operator<(Like rhs) const noexcept { return other < rhs.other; }
+	bool operator==(Like rhs) const noexcept { return other == rhs.other; }
+	Like& operator+=(Like rhs) noexcept { net_ts += rhs.net_ts; num_tss += rhs.num_tss; return *this; }
+};
+
+/*
 namespace data_grammar {
 	namespace pegtl = tao::pegtl::utf8;
 
@@ -161,6 +178,7 @@ namespace query_grammar {
 	template<class Rule>
 	struct action : pegtl::nothing<Rule> {};
 }
+*/
 
 #include <vector>
 template<class T, class Comparator = std::less<T>>
@@ -169,6 +187,7 @@ struct set {
 	bool universe = false;
 	Comparator cmp;
 
+	set() = default;
     set(std::initializer_list<T> il) : elements(il.begin(), il.end()) {}
 	set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
 
@@ -185,7 +204,14 @@ struct set {
 		}
 		return *this;
 	}
-	set& insert(T value) { elements.insert(std::upper_bound(elements.begin(), elements.end(), value, cmp), value); return *this; }
+	set& unsafe_insert(T value) noexcept {
+		elements.insert(std::upper_bound(elements.begin(), elements.end(), value, cmp), value); return *this;
+	}
+	set& ensure_guarantees() {
+		std::sort(elements.begin(), elements.end(), cmp);
+		elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
+		return *this;
+	}
 	set& unite(const set<T>& rhs) noexcept {
 		elements.reserve(elements.size() + rhs.elements.size());
 		auto left_it = elements.begin();
@@ -197,56 +223,75 @@ struct set {
 	}
 };
 
-#include <cstdint>
-#include <cstddef>
-template<unsigned char base>
-constexpr uint8_t from_digit(char d) {
-	uint8_t result = d - '0';
-	if constexpr (base > 10) {
-		if (result >= base) result -= ('A' - '0'), result += 10;
-		if (result >= base) result -= ('a' - 'A');
-	}
-	return result;
-}
-
-template<unsigned char base, bool upper = false>
-constexpr char to_digit(uint8_t d) {
-	char result = d + '0';
-	if constexpr (base > 10) {
-		if (result > '9') {
-			result -= 10;
-			if constexpr (upper) result += ('A' - '0');
-			else result += ('a' - '0');
+template<>
+set<Like>& set<Like>::ensure_guarantees() {
+	std::sort(elements.begin(), elements.end(), cmp);
+	auto it1 = elements.begin(); const auto it2 = elements.end();
+	while (it1 != it2) {
+		auto r = std::equal_range(it1, it2, *it1).second;
+		for (auto inner_it = it1 + 1; inner_it != r; ++inner_it) {
+			*it1 += *inner_it;
+			inner_it->other = 0;
 		}
+		elements.erase(std::remove(elements.begin(), elements.end(), Like{0, 0, 0}), elements.end());
+		it1 = r;
 	}
-	return result;
+	return *this;
 }
 
-constexpr int64_t pow(int64_t a, int64_t b) {
-	if (b == 0) return 1;
-	return a * pow(a, b - 1);
-}
+namespace intparsing {
+	#include <cstdint>
+	#include <cstddef>
+	template<unsigned char base>
+	constexpr uint8_t from_digit(char d) {
+		uint8_t result = d - '0';
+		if constexpr (base > 10) {
+			if (result >= base) result -= ('A' - '0'), result += 10;
+			if (result >= base) result -= ('a' - 'A');
+		}
+		return result;
+	}
 
-template<size_t num_digits, unsigned char base>
-constexpr uint64_t readint(const char* sym) {
-	uint64_t result = 0;
-	for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * pow(16, i);
-	return result;
-}
+	template<unsigned char base, bool upper = false>
+	constexpr char to_digit(uint8_t d) {
+		char result = d + '0';
+		if constexpr (base > 10) {
+			if (result > '9') {
+				result -= 10;
+				if constexpr (upper) result += ('A' - '0');
+				else result += ('a' - '0');
+			}
+		}
+		return result;
+	}
 
-#inclue <array>
-template<size_t num_digits, unsigned char base>
-constexpr std::array<char, num_digits> showint(uint64_t value) {
-	std::array<char, num_digits> result;
-	for (int i = 0; i < num_digits; ++i) result[i] = to_digit<base>((value / pow(base, num_digits-1 - i)) % base);
-	return result;
+	constexpr int64_t pow(int64_t a, int64_t b) {
+		if (b == 0) return 1;
+		return a * intparsing::pow(a, b - 1);
+	}
+
+	template<size_t num_digits, unsigned char base>
+	constexpr uint64_t readint(const char* sym) {
+		uint64_t result = 0;
+		for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * intparsing::pow(16, i);
+		return result;
+	}
+
+	#include <array>
+	template<size_t num_digits, unsigned char base>
+	constexpr std::array<char, num_digits> showint(uint64_t value) {
+		std::array<char, num_digits> result;
+		for (int i = 0; i < num_digits; ++i) result[i] = to_digit<base>((value / intparsing::pow(base, num_digits-1 - i)) % base);
+		return result;
+	}
 }
 
 // all the per-symbol decoding is to be done via parser actions
 
 /* Define indices */
-#include "tsl/array_map"
-#include "tsl/htrie_set.h"
+#include "tsl/array_map.h"
+#include "tsl/htrie_map.h"
+#include <unordered_map>
 std::array<set<Id>, 2> ids_by_sex; // to be accessed via sex_t
 tsl::array_map<char, set<Id>> ids_by_domain; // to be used with insert_ks
 std::vector<Id> ids_sorted_by_email;
@@ -259,8 +304,8 @@ tsl::array_map<char, set<Id>> ids_by_country;
 tsl::array_map<char, set<Id>> ids_by_city;
 std::vector<Id> ids_sorted_by_birth;
 tsl::array_map<char, set<Id>> ids_by_interest;
-std::unordered_map<Id, Set<Id>> liked_ids_by_id;
-std::array<Set<Id>, 2> ids_by_premium_now;
-std::array<Set<Id>, 2> ids_by_premium_presence;
+std::unordered_map<Id, set<Id>> liked_ids_by_id;
+std::array<set<Id>, 2> ids_by_premium_now;
+std::array<set<Id>, 2> ids_by_premium_presence;
 std::vector<Account> accounts_by_id; // ids are considered contiguous
-std::vector<set<Like, LikeCmp>> likes_by_id;
+std::vector<set<Like>> likes_by_id;
