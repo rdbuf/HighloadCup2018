@@ -8,8 +8,8 @@ Rules: https://highloadcup.ru/ru/round/4/
 
 ### Roadmap
 - [x] Indices
-- [ ] Request parsing
 - [ ] JSON parsing
+- [ ] Request parsing
 - [ ] JSON printing
 - [ ] Asio setup
 
