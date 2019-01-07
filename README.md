@@ -8,6 +8,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 
 ### Assumptions
 - Names only contain cyrillic symbols
+- Overall, there are only cyrillic and ascii characters present
 - Time is static
 
 ### 0. Imaginary database schema
