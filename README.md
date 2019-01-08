@@ -8,6 +8,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 
 ### Roadmap
 - [x] Indices
+	- [ ] For each id, keep track of the users with non-zero interests intersection: there won't be many
 - [ ] JSON parsing
 - [ ] Request parsing
 - [ ] JSON printing
@@ -18,6 +19,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 - Overall, there are only cyrillic and ascii characters present
 - Time is static
 - Ids are contiguous
+- There are no collisions of string hashes
 
 ### Imaginary database schema
 ```
