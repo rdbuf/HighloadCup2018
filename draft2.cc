@@ -112,7 +112,7 @@ struct set {
 
 using CoolHash = std::hash<std::string_view>::result_type;
 
-CoolHash coolhash(const char* str) { return std::hash<std::string_view>{}(str); }
+CoolHash coolhash(const char* str, size_t n) { return std::hash<std::string_view>{}(std::string_view(str, n)); }
 tsl::hopscotch_map<CoolHash, name_t> fnames;
 tsl::hopscotch_map<CoolHash, name_t> snames;
 tsl::hopscotch_map<CoolHash, country_t> countries;
@@ -221,15 +221,15 @@ namespace intparsing {
 		return a * intparsing::pow(a, b - 1);
 	}
 
-	template<size_t num_digits, unsigned char base>
-	constexpr uint64_t readint(const char* sym) {
+	template<unsigned char base>
+	constexpr uint64_t readint(const char* sym, size_t num_digits) {
 		uint64_t result = 0;
 		for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * intparsing::pow(16, i);
 		return result;
 	}
 
 	#include <array>
-	template<size_t num_digits, unsigned char base>
+	template<unsigned char base, size_t num_digits>
 	constexpr std::array<char, num_digits> showint(uint64_t value) {
 		std::array<char, num_digits> result;
 		for (int i = 0; i < num_digits; ++i) result[i] = to_digit<base>((value / intparsing::pow(base, num_digits-1 - i)) % base);
@@ -241,29 +241,71 @@ namespace intparsing {
 /* Parsers */
 
 /* JSON, the main idea:
- * on closing }, move current account into the store and zero it out
+ * on Account match, move current account into the store and zero it out
  * for every field: seq<STRING(field_name), wss, one<' '>, wss, field_value, wss>
  * where field_value has an action attached which writes the appropriate value into current account
  * lists work this way too
  */
 
-/*
 namespace data_grammar {
-	namespace pegtl = tao::pegtl::utf8;
+	namespace pegtl = tao::pegtl;
 
+	/* Semantics */
+	// Id id; // to be grabbed
+	// Account account; // to be filled
+	// std::string buffer;
+
+	struct id : pegtl::plus<pegtl::digit> {};
+	struct email : pegtl::plus<pegtl::any> {};
+	struct fname : pegtl::plus<pegtl::any> {};
+	struct sname : pegtl::plus<pegtl::any> {};
+	struct phone : pegtl::plus<pegtl::any> {};
+	struct sex : pegtl::plus<pegtl::any> {};
+	struct birth : pegtl::plus<pegtl::any> {};
+	struct country : pegtl::plus<pegtl::any> {};
+	struct city : pegtl::plus<pegtl::any> {};
+	struct joined : pegtl::plus<pegtl::any> {};
+	struct status : pegtl::plus<pegtl::any> {};
+	struct interest : pegtl::plus<pegtl::any> {};
+	struct premium_start : pegtl::plus<pegtl::any> {};
+	struct premium_end : pegtl::plus<pegtl::any> {};
+	struct like : pegtl::plus<pegtl::any> {};
+
+	/* Syntax */
 	struct wss : pegtl::star<pegtl::one<' '>> {};
-	template<class Rule>
-	struct cons_wss : pegtl::seq<Rule, wss> {};
-
-	struct list; //
-	struct account; // action: add to indices
-	struct file;
-
-	Id id; // to be grabbed
-	Account; // to be filled
-
+	template<char Opening, class Rule, char Closing>
+	struct list : pegtl::seq<pegtl::one<Opening>, wss, pegtl::list<Rule, pegtl::one<','>, pegtl::one<' '>>, pegtl::one<Closing>> {};
+	template<class... Fields>
+	struct object : list<'{', pegtl::sor<Fields...>, '}'> {};
+	template<class Element>
+	struct array : list<'[', Element, ']'> {};
+	template<class Rule, char quotation_mark = '"'>
+	struct quoted : pegtl::seq<pegtl::one<quotation_mark>, Rule, pegtl::one<quotation_mark>> {};
+	template<class Name, class Value>
+	struct field : pegtl::seq<quoted<Name>, wss, pegtl::one<':'>, wss, Value> {};
+	struct account : object<
+		field<TAO_PEGTL_STRING("id"), id>,
+		field<TAO_PEGTL_STRING("email"), quoted<email>>,
+		field<TAO_PEGTL_STRING("fname"), quoted<fname>>,
+		field<TAO_PEGTL_STRING("sname"), quoted<sname>>,
+		field<TAO_PEGTL_STRING("phone"), quoted<phone>>,
+		field<TAO_PEGTL_STRING("sex"), quoted<sex>>,
+		field<TAO_PEGTL_STRING("birth"), birth>,
+		field<TAO_PEGTL_STRING("country"), quoted<country>>,
+		field<TAO_PEGTL_STRING("city"), quoted<city>>,
+		field<TAO_PEGTL_STRING("joined"), joined>,
+		field<TAO_PEGTL_STRING("status"), quoted<status>>,
+		field<TAO_PEGTL_STRING("interests"), array<quoted<interest>>>,
+		field<TAO_PEGTL_STRING("premium"), object<
+			field<TAO_PEGTL_STRING("start"), premium_start>,
+			field<TAO_PEGTL_STRING("finish"), premium_end>
+		>>,
+		field<TAO_PEGTL_STRING("likes"), array<like>>
+	> {};
+	struct file : object<field<TAO_PEGTL_STRING("accounts"), array<account>>> {};
 }
 
+/*
 namespace query_grammar {
 	namespace pegtl = tao::pegtl::ascii;
 
