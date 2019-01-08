@@ -97,24 +97,36 @@ struct set {
 };
 
 
-#include "tsl/array_set.h"
-// #include "tsl/hopscotch_set.h"
-tsl::array_set<char> fnames;
-tsl::array_set<char> snames;
-tsl::array_set<char> countries;
-tsl::array_set<char> cities;
-tsl::array_set<char> interests;
+#include "tsl/array_map.h"
+#include "tsl/hopscotch_map.h"
+// std::vector<name_t> fnames;
+// tsl::array_map<char, size_t> fname_idcs;
+// std::vector<name_t> snames;
+// tsl::array_map<char, size_t> sname_idcs;
+// std::vector<country_t> countries;
+// tsl::array_map<char, size_t> country_idcs;
+// std::vector<city_t> cities;
+// tsl::array_map<char, size_t> city_idcs;
+// std::vector<interest_t> interests;
+// tsl::array_map<char, size_t> interest_idcs;
 
-using Hash = size_t;
+using CoolHash = std::hash<std::string_view>::result_type;
+
+CoolHash coolhash(const char* str) { return std::hash<std::string_view>{}(str); }
+tsl::hopscotch_map<CoolHash, name_t> fnames;
+tsl::hopscotch_map<CoolHash, name_t> snames;
+tsl::hopscotch_map<CoolHash, country_t> countries;
+tsl::hopscotch_map<CoolHash, city_t> cities;
+tsl::hopscotch_map<CoolHash, interest_t> interests;
 
 #include <optional>
 #include <string_view>
 struct Account { // size: 784 -> 368 -> 272
 	email_t email;
-	set<Hash> interests;
-	std::optional<Hash> fname_hash, sname_hash;
-	std::optional<Hash> country_hash;
-	std::optional<Hash> city_hash;
+	set<CoolHash> interest_idcs;
+	std::optional<CoolHash> fname_idx, sname_idx;
+	std::optional<CoolHash> country_idx;
+	std::optional<CoolHash> city_idx;
 	std::optional<phone_t> phone;
 	EpochSecs birth, joined, premium_beg, premium_end;
 	Id id;
@@ -227,6 +239,14 @@ namespace intparsing {
 }
 
 /* Parsers */
+
+/* JSON, the main idea:
+ * on closing }, move current account into the store and zero it out
+ * for every field: seq<STRING(field_name), wss, one<' '>, wss, field_value, wss>
+ * where field_value has an action attached which writes the appropriate value into current account
+ * lists work this way too
+ */
+
 /*
 namespace data_grammar {
 	namespace pegtl = tao::pegtl::utf8;
