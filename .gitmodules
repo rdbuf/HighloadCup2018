@@ -13,3 +13,6 @@
 [submodule "third-party/hopscotch-map"]
 	path = third-party/hopscotch-map
 	url = https://github.com/Tessil/hopscotch-map.git
+[submodule "third-party/icu-cmake"]
+	path = third-party/icu-cmake
+	url = https://github.com/viaduck/icu-cmake.git
