@@ -9,17 +9,37 @@ Rules: https://highloadcup.ru/ru/round/4/
 ### Roadmap
 - [x] Indices
 	- [ ] For each id, keep track of the users with non-zero interests intersection: there won't be many
-- [ ] JSON parsing
+- [x] JSON parsing
+	- [x] email
+	- [x] fname
+	- [x] sname
+	- [x] phone
+	- [x] sex
+	- [x] birth
+	- [x] country
+	- [x] city
+	- [x] joined
+	- [x] status
+	- [x] interests
+	- [x] premium
+	- [x] likes
+- [ ] More suitable data structures for indices
+	- [ ] Fill with actual data
 - [ ] Request parsing
 - [ ] JSON printing
 - [ ] Asio setup
+- [ ] Perf setup (inside of Docker)
 
 ### Assumptions
 - Names only contain cyrillic symbols
 - Overall, there are only cyrillic and ascii characters present
 - Time is static
-- Ids are contiguous
+- Ids are mostly contiguous
 - There are no collisions of string hashes
+- See parsers for the input language specs
+- Phone code fits into uint16_t
+- Initial data are valid
+- Prefix and code of any phone number begin with a non-zero digit, and all the parts fit into their respective bitfields of 8, 16 and 36 bits
 
 ### Imaginary database schema
 ```

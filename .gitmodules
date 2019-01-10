@@ -16,3 +16,6 @@
 [submodule "third-party/icu-cmake"]
 	path = third-party/icu-cmake
 	url = https://github.com/viaduck/icu-cmake.git
+[submodule "third-party/utf8_encode"]
+	path = third-party/utf8_encode
+	url = https://gist.github.com/MightyPork/52eda3e5677b4b03524e40c9f0ab1da5
