@@ -28,15 +28,30 @@ tsl::hopscotch_map<CoolHash, interest_t> interests;
 #include <tsl/array_map.h>
 #include <tsl/htrie_map.h>
 #include <unordered_map>
-std::array<std::optional<Account>, 1600000> accounts_by_id; // ids are considered mostly contiguous
-tsl::hopscotch_map<Id, Account> accounts_by_id_fallback;
+struct {
+	std::array<std::optional<Account>, 1600000> static_; // ids are considered mostly contiguous
+	tsl::hopscotch_map<Id, Account> dynamic;
+
+	template<class F>
+	void foreach(F f) {
+		for (std::optional<Account>& acc : static_) if (acc) f(*acc);
+		for (const std::pair<Id, Account>& acc : dynamic) f(const_cast<Account&>(acc.second));
+	}
+
+	Account& operator[](Id idx) noexcept {
+		if (idx < static_.size()) {
+			if (!static_[idx]) static_[idx] = Account{};
+			return *static_[idx];
+		} else {
+			return dynamic[idx];
+		}
+	}
+} accounts_by_id;
 // candidate for set<Id> ids_with_female_gender;
 std::array<set<Id>, 2> ids_by_sex; // to be accessed via sex_t
 tsl::array_map<char, set<Id>> ids_by_domain; // to be used with insert_ks
 struct cmp_id_by_email { bool operator()(Id a, Id b) { // all optionals are assumed to be present
-	const Account& a_acc = (a < accounts_by_id.size() ? *accounts_by_id[a] : accounts_by_id_fallback[a]);
-	const Account& b_acc = (b < accounts_by_id.size() ? *accounts_by_id[b] : accounts_by_id_fallback[b]);
-	return *(a_acc.email) < *(b_acc.email);
+	return *accounts_by_id[a].email < *accounts_by_id[b].email;
 }};
 set<Id, cmp_id_by_email> ids_sorted_by_email;
 // candidate for array<set<Id>, 2> ids_by_nonfree_status
@@ -49,9 +64,7 @@ std::array<set<Id>, 2> ids_by_phone_presence; // to be accessed via presence_t
 tsl::array_map<char, set<Id>> ids_by_country;
 tsl::array_map<char, set<Id>> ids_by_city;
 struct cmp_id_by_birth { bool operator()(Id a, Id b) { // all optionals are assumed to be present
-	const Account& a_acc = (a < accounts_by_id.size() ? *accounts_by_id[a] : accounts_by_id_fallback[a]);
-	const Account& b_acc = (b < accounts_by_id.size() ? *accounts_by_id[b] : accounts_by_id_fallback[b]);
-	return a_acc.birth < b_acc.birth;
+	return accounts_by_id[a].birth < accounts_by_id[b].birth;
 }};
 set<Id, cmp_id_by_birth> ids_sorted_by_birth;
 tsl::array_map<char, set<Id>> ids_by_interest;
@@ -356,10 +369,8 @@ namespace data_grammar {
 
 		// std::cerr << "[.] processing " << id << '\n';
 
-		if (id < accounts_by_id.size()) accounts_by_id[id] = std::move(acc);
-		else accounts_by_id_fallback[id] = std::move(acc);
+		const Account& acc_ref = accounts_by_id[id] = std::move(acc);
 		acc = Account{};
-		const Account& acc_ref = (id < accounts_by_id.size() ? *accounts_by_id[id] : accounts_by_id_fallback[id]);
 
 		// std::cerr << "  index: ids_by_sex" << '\n';
 		ids_by_sex[acc_ref.sex].insert(id);
@@ -406,18 +417,27 @@ void report() {
 		countries.size(), cities.size(),
 		interests.size()
 	);
-	std::cerr << fmt::format("accounts_by_id_fallback: {}\n", accounts_by_id_fallback.size());
+	std::cerr << fmt::format("accounts_by_id.dynamic: {}\n", accounts_by_id.dynamic.size());
 
 	std::cerr << fmt::format("ids total: {}\n", ids_sorted_by_email.size());
 
 	cnt = 0; for (const auto& x : ids_by_interest) cnt += x.size();
 	std::cerr << fmt::format("ids_by_interest: {}\n", cnt);
 
-	cnt = 0; for (const auto& x : accounts_by_id) if (x) cnt += x->likes.size();
+	cnt = 0; for (const auto& x : accounts_by_id.static_) if (x) cnt += x->likes.size();
 	std::cerr << fmt::format("likes: {}\n", cnt);
 }
 
+void build_likers() {
+	accounts_by_id.foreach([&](Account& acc) {
+		for (Like like : acc.likes) {
+			accounts_by_id[like.other].likers.insert(acc.id);
+		}
+	});
+}
+
 #include <iostream>
+#include <filesystem>
 int main(int argc, char** argv) {
 	namespace pegtl = tao::pegtl;
 
@@ -431,6 +451,7 @@ int main(int argc, char** argv) {
 		pegtl::parse<pegtl::must<data_grammar::file>, data_grammar::action>(in, acc, domain, buffer, like);
 	}
 
+	build_likers();
 	report();
 }
 
