@@ -5,6 +5,7 @@ add_executable(HighloadCup2018 draft2.cc)
 
 target_link_libraries(HighloadCup2018 PRIVATE -lfmt)
 target_link_libraries(HighloadCup2018 PRIVATE -pg)
+target_link_libraries(HighloadCup2018 PRIVATE -g)
 
 set(PEGTL_BUILD_TESTS OFF CACHE BOOL OFF FORCE)
 set(PEGTL_BUILD_EXAMPLES OFF CACHE BOOL OFF FORCE)

@@ -28,7 +28,6 @@ tsl::hopscotch_map<CoolHash, interest_t> interests;
 #include <tsl/array_map.h>
 #include <tsl/htrie_map.h>
 #include <unordered_map>
-// currently we store at least 1600000 * 352 + (12 + 3) * N
 std::array<std::optional<Account>, 1600000> accounts_by_id; // ids are considered mostly contiguous
 tsl::hopscotch_map<Id, Account> accounts_by_id_fallback;
 // candidate for set<Id> ids_with_female_gender;
@@ -40,6 +39,7 @@ struct cmp_id_by_email { bool operator()(Id a, Id b) { // all optionals are assu
 	return *(a_acc.email) < *(b_acc.email);
 }};
 set<Id, cmp_id_by_email> ids_sorted_by_email;
+// candidate for array<set<Id>, 2> ids_by_nonfree_status
 std::array<set<Id>, 3> ids_by_status; // to be accessed via status_t
 tsl::array_map<char, set<Id>> ids_by_fname;
 tsl::htrie_map<char, set<Id>> ids_by_sname;
@@ -66,9 +66,10 @@ int64_t current_ts;
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
 namespace intparsing {
 	template<unsigned char base>
-	constexpr uint8_t from_digit(char d) {
+	constexpr uint64_t from_digit(char d) {
 		uint8_t result = d - '0';
 		if constexpr (base > 10) {
 			if (result >= base) result -= ('A' - '0'), result += 10;
@@ -90,7 +91,7 @@ namespace intparsing {
 		return result;
 	}
 
-	constexpr int64_t pow(int64_t a, int64_t b) {
+	constexpr uint64_t pow(uint64_t a, uint64_t b) {
 		if (b == 0) return 1;
 		return a * intparsing::pow(a, b - 1);
 	}
@@ -98,11 +99,10 @@ namespace intparsing {
 	template<unsigned char base>
 	constexpr uint64_t readint(const char* sym, size_t num_digits) {
 		uint64_t result = 0;
-		for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * intparsing::pow(16, i);
+		for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * intparsing::pow(base, i);
 		return result;
 	}
 
-	#include <array>
 	template<unsigned char base, size_t num_digits>
 	constexpr std::array<char, num_digits> showint(uint64_t value) {
 		std::array<char, num_digits> result;
@@ -353,6 +353,7 @@ namespace data_grammar {
 	template<>
 	struct action<account> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		Id id = acc.id;
+
 		// std::cerr << "[.] processing " << id << '\n';
 
 		if (id < accounts_by_id.size()) accounts_by_id[id] = std::move(acc);
@@ -390,35 +391,6 @@ namespace data_grammar {
 		domain.clear();
 		// std::cerr << "[+] processed" << '\n';
 	}};
-}
-
-void build_interests_intersection_index() {
-	const auto process = [](Account& acc) {
-		for (CoolHash hash : acc.interest_idcs) {
-			const set<Id>& ids = ids_by_interest[interests[hash]];
-			acc.nonzero_interest_intersection.elements.insert(
-				acc.nonzero_interest_intersection.elements.end(),
-				ids.begin(), ids.end()
-			);
-			acc.nonzero_interest_intersection.ensure_guarantees();
-		}
-		// std::vector<Id> others;
-		// for (CoolHash hash : acc.interest_idcs) {
-		// 	const set<Id>& ids = ids_by_interest[interests[hash]];
-		// 	others.insert(others.end(), ids.begin(), ids.end());
-		// }
-		// std::sort(others.begin(), others.end());
-
-		// for (
-		// 	auto range_beg = others.begin(), range_end = std::equal_range(range_beg, others.end(), *range_beg).second;
-		// 	range_beg != others.end();
-		// 	range_beg = range_end, range_end = std::equal_range(range_beg, others.end(), *range_beg).second
-		// ) {
-		// 	acc.nonzero_interest_intersection[range_end - range_beg].insert(*range_beg);
-		// }
-	};
-	for (auto& x : accounts_by_id) if (x) process(*x);
-	for (const auto& x : accounts_by_id_fallback) process(const_cast<Account&>(x.second));
 }
 
 void report() {
@@ -459,7 +431,6 @@ int main(int argc, char** argv) {
 		pegtl::parse<pegtl::must<data_grammar::file>, data_grammar::action>(in, acc, domain, buffer, like);
 	}
 
-	build_interests_intersection_index();
 	report();
 }
 
