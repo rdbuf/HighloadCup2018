@@ -3,184 +3,64 @@
 
 #define FMT_STRING_ALIAS 1
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 
 /* Definition of domain specific types */
 
-#include <string_view>
-template<size_t Len, size_t BytesPerSymbol>
-struct fixwstr { // unsafe fixed-width string without boundary checks
-	char str[Len*BytesPerSymbol+1];
-	char* ptr = str;
+#include "set.hh"
+#include <tsl/array_map.h>
+#include <tsl/hopscotch_map.h>
 
-	fixwstr() = default;
-	fixwstr(const char* a, size_t sz) noexcept {
-		std::memcpy(ptr, a, sz);
-		ptr += sz;
-	}
+#include "common-types.hh"
 
-	operator std::string_view() { return std::string_view(str, ptr - str); }
-
-	char* begin() noexcept { return str; }
-	char* end() noexcept { return ptr; }
-	const char* begin() const noexcept { return str; }
-	const char* end() const noexcept { return ptr; }
-
-	size_t size() const noexcept { return ptr - str; }
-
-	fixwstr& operator+=(char a) noexcept { *ptr++ = a; return *this; }
-	fixwstr& operator+=(const char* a) noexcept {
-		const int sz = std::strlen(a);
-		std::memcpy(ptr, a, sz);
-		ptr += sz;
-        return *this;
-	}
-
-	fixwstr& operator-=(int n) noexcept { ptr -= n; return *this; }
-
-	fixwstr& ensure_zero() noexcept { *ptr = 0; return *this; }
-    operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(str); }
-};
-
-using Id = uint32_t;
-using EpochSecs = int64_t;
-enum sex_t { male, female };
-enum status_t { single, relationship, undecided };
-using email_t = fixwstr<100, 1>;
-using domain_t = fixwstr<100, 1>;
-using name_t = fixwstr<50, 2>;
-struct phone_t {
-	uint64_t prefix : 8, code : 16, num_len : 4, num : 36;
-};
-// using phone_t = uint64_t;
-using country_t = fixwstr<50, 2>;
-using city_t = fixwstr<50, 2>;
-using interest_t = fixwstr<100, 2>;
-
-#include <vector>
-#include <algorithm>
-template<class T>
-// this shit doesn't pay off.
-// needa faster insertions
-struct set {
-	std::vector<T> elements;
-	bool universe = false;
-
-	set() = default;
-    set(std::initializer_list<T> il) : elements(il.begin(), il.end()) {}
-	set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
-
-	set& intersect(const set<T>& rhs) noexcept {
-		if (universe) { *this = rhs; }
-		else {
-			auto left_it = rhs.elements.begin(), right_it = rhs.elements.end();
-			const auto removed_range_begin = std::remove_if(elements.begin(), elements.end(), [&left_it, &right_it, this](const T& x) {
-				left_it = std::lower_bound(left_it, right_it, x);
-				bool result = *left_it != x;
-				return result;
-			});
-			elements.resize(removed_range_begin - elements.begin());
-		}
-		return *this;
-	}
-	set& unsafe_mid_insert(T value) noexcept {
-		elements.insert(std::upper_bound(elements.begin(), elements.end(), value), value); return *this;
-	}
-	set& unsafe_end_insert(T value) noexcept {
-		elements.push_back(value); return *this;
-	}
-	set& ensure_guarantees() {
-		std::sort(elements.begin(), elements.end());
-		elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
-		return *this;
-	}
-	set& unite(const set<T>& rhs) noexcept {
-		elements.reserve(elements.size() + rhs.elements.size());
-		auto left_it = elements.begin();
-		for (auto it = rhs.elements.begin(); it != rhs.elements.end(); ++it) {
-			left_it = std::lower_bound(left_it, elements.end(), *it);
-			if (left_it == elements.end() || *left_it != *it) elements.insert(left_it, *it);
-		}
-		return *this;
-	}
-};
-
-
-#include "tsl/array_map.h"
-#include "tsl/hopscotch_map.h"
-
-using CoolHash = std::hash<std::string_view>::result_type;
-
-CoolHash coolhash(const char* str, size_t n) { return std::hash<std::string_view>{}(std::string_view(str, n)); }
 tsl::hopscotch_map<CoolHash, name_t> fnames;
 tsl::hopscotch_map<CoolHash, name_t> snames;
 tsl::hopscotch_map<CoolHash, country_t> countries;
 tsl::hopscotch_map<CoolHash, city_t> cities;
 tsl::hopscotch_map<CoolHash, interest_t> interests;
 
-#include <optional>
-#include <string_view>
-struct Account { // size: 784 -> 368 -> 272
-	email_t email;
-	set<CoolHash> interest_idcs;
-	std::optional<CoolHash> fname_idx, sname_idx;
-	std::optional<CoolHash> country_idx;
-	std::optional<CoolHash> city_idx;
-	std::optional<phone_t> phone;
-	EpochSecs birth, joined, premium_start, premium_end;
-	Id id;
-	status_t status;
-	sex_t sex;
-};
+#include "account.hh"
+#include "like.hh"
+#include "string.hh"
 
-struct Like {
-	Id other;
-	__int128_t net_ts;
-	int64_t num_tss;
-
-	bool operator<(Like rhs) const noexcept { return other < rhs.other; }
-	bool operator==(Like rhs) const noexcept { return other == rhs.other; }
-	Like& operator+=(Like rhs) noexcept { net_ts += rhs.net_ts; num_tss += rhs.num_tss; return *this; }
-};
-
-template<>
-set<Like>& set<Like>::ensure_guarantees() {
-	std::sort(elements.begin(), elements.end());
-	auto it1 = elements.begin(); const auto it2 = elements.end();
-	while (it1 != it2) {
-		auto r = std::equal_range(it1, it2, *it1).second;
-		for (auto inner_it = it1 + 1; inner_it != r; ++inner_it) {
-			*it1 += *inner_it;
-			inner_it->other = 0;
-		}
-		elements.erase(std::remove(elements.begin(), elements.end(), Like{0, 0, 0}), elements.end());
-		it1 = r;
-	}
-	return *this;
-}
-
-/* Definition of indices */
+/* Indices */
 
 #include <tsl/array_map.h>
 #include <tsl/htrie_map.h>
 #include <unordered_map>
+// currently we store at least 1600000 * 352 + (12 + 3) * N
+std::array<std::optional<Account>, 1600000> accounts_by_id; // ids are considered mostly contiguous
+tsl::hopscotch_map<Id, Account> accounts_by_id_fallback;
+// candidate for set<Id> ids_with_female_gender;
 std::array<set<Id>, 2> ids_by_sex; // to be accessed via sex_t
 tsl::array_map<char, set<Id>> ids_by_domain; // to be used with insert_ks
-std::vector<Id> ids_sorted_by_email;
+struct cmp_id_by_email { bool operator()(Id a, Id b) { // all optionals are assumed to be present
+	const Account& a_acc = (a < accounts_by_id.size() ? *accounts_by_id[a] : accounts_by_id_fallback[a]);
+	const Account& b_acc = (b < accounts_by_id.size() ? *accounts_by_id[b] : accounts_by_id_fallback[b]);
+	return *(a_acc.email) < *(b_acc.email);
+}};
+set<Id, cmp_id_by_email> ids_sorted_by_email;
 std::array<set<Id>, 3> ids_by_status; // to be accessed via status_t
 tsl::array_map<char, set<Id>> ids_by_fname;
 tsl::htrie_map<char, set<Id>> ids_by_sname;
 tsl::hopscotch_map<uint16_t, set<Id>> ids_by_code;
-std::array<set<Id>, 2> ids_by_code_presence; // to be accessed via presence_t
+// candidate for set<Id> ids_with_phone
+std::array<set<Id>, 2> ids_by_phone_presence; // to be accessed via presence_t
 tsl::array_map<char, set<Id>> ids_by_country;
 tsl::array_map<char, set<Id>> ids_by_city;
-std::vector<Id> ids_sorted_by_birth;
+struct cmp_id_by_birth { bool operator()(Id a, Id b) { // all optionals are assumed to be present
+	const Account& a_acc = (a < accounts_by_id.size() ? *accounts_by_id[a] : accounts_by_id_fallback[a]);
+	const Account& b_acc = (b < accounts_by_id.size() ? *accounts_by_id[b] : accounts_by_id_fallback[b]);
+	return a_acc.birth < b_acc.birth;
+}};
+set<Id, cmp_id_by_birth> ids_sorted_by_birth;
 tsl::array_map<char, set<Id>> ids_by_interest;
-std::unordered_map<Id, set<Id>> liked_ids_by_id;
-std::array<set<Id>, 2> ids_by_premium_now;
+// candidate for set<Id> ids_with_premium_now
+set<Id> ids_by_premium_now;
+// candidate for set<Id> ids_with_premium
 std::array<set<Id>, 2> ids_by_premium_presence;
-std::array<std::optional<Account>, 1600000> accounts_by_id; // ids are considered mostly contiguous
-tsl::hopscotch_map<Id, Account> accounts_by_id_fallback;
-std::array<set<Like>, 1600000> likes_by_id;
+
+int64_t current_ts;
 
 /* Helpers for parsing */
 
@@ -345,7 +225,7 @@ namespace data_grammar {
 
 	template<>
 	struct action<like> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		// push it where aimed
+		acc.likes.insert(like);
 		like = Like{};
 	}};
 
@@ -379,14 +259,15 @@ namespace data_grammar {
 
 	template<>
 	struct action<interest> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		CoolHash h = *(acc.city_idx = coolhash(buffer.c_str(), buffer.length()));
-		if (cities.find(h) == cities.end()) cities[h] = city_t(buffer.c_str(), buffer.length());
+		CoolHash h = coolhash(buffer.c_str(), buffer.length());
+		acc.interest_idcs.insert(h);
+		if (interests.find(h) == interests.end()) interests[h] = interest_t(buffer.c_str(), buffer.length());
 		buffer.clear();
 	}};
 
 	template<>
 	struct action<phone_prefix> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.phone = {}; // init the optional
+		acc.phone = phone_t{}; // init the optional
 		acc.phone->prefix = intparsing::readint<10>(in.begin(), in.size());
 	}};
 
@@ -438,6 +319,7 @@ namespace data_grammar {
 
 	template<>
 	struct action<email_domain> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+		// std::cerr << fmt::format("    assigning domain = {}, size = {}\n", std::string_view(in.begin(), in.size()), in.size());
 		domain = email_t(in.begin(), in.size());
 	}};
 
@@ -471,26 +353,114 @@ namespace data_grammar {
 	template<>
 	struct action<account> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		Id id = acc.id;
+		// std::cerr << "[.] processing " << id << '\n';
+
 		if (id < accounts_by_id.size()) accounts_by_id[id] = std::move(acc);
 		else accounts_by_id_fallback[id] = std::move(acc);
-
-		if (acc.phone) ids_by_code[acc.phone->code].unsafe_end_insert(id);
-
 		acc = Account{};
-		domain = email_t{};
+		const Account& acc_ref = (id < accounts_by_id.size() ? *accounts_by_id[id] : accounts_by_id_fallback[id]);
+
+		// std::cerr << "  index: ids_by_sex" << '\n';
+		ids_by_sex[acc_ref.sex].insert(id);
+		// std::cerr << fmt::format("  index: ids_by_domain (domain = {}, len = {}, str = {}, ptr = {})\n", domain, domain.size(), (void*)domain.str, (void*)domain.ptr);
+		ids_by_domain[domain].insert(id);
+		// std::cerr << "  index: ids_sorted_by_email" << '\n';
+		if (acc_ref.email) ids_sorted_by_email.insert(id);
+		// std::cerr << "  index: ids_by_status" << '\n';
+		ids_by_status[acc_ref.status].insert(id);
+		// std::cerr << "  index: ids_by_fname" << '\n';
+		if (acc_ref.fname_idx) ids_by_fname[fnames[*acc_ref.fname_idx]].insert(id);
+		// std::cerr << "  index: ids_by_sname" << '\n';
+		if (acc_ref.sname_idx) ids_by_sname[snames[*acc_ref.sname_idx]].insert(id);
+		// std::cerr << "  index: ids_by_code" << '\n';
+		if (acc_ref.phone) ids_by_code[acc_ref.phone->code].insert(id);
+		// std::cerr << "  index: ids_by_phone_presence" << '\n';
+		ids_by_phone_presence[acc_ref.phone.has_value()].insert(id);
+		// std::cerr << "  index: ids_by_country" << '\n';
+		if (acc_ref.country_idx) ids_by_country[countries[*acc_ref.country_idx]].insert(id);
+		// std::cerr << "  index: ids_by_city" << '\n';
+		if (acc_ref.city_idx) ids_by_city[cities[*acc_ref.city_idx]].insert(id);
+		// std::cerr << "  index: ids_by_interest" << '\n';
+		for (const CoolHash hash : acc_ref.interest_idcs) ids_by_interest[interests[hash]].insert(id);
+		// std::cerr << "  index: ids_by_premium_now" << '\n';
+		if (*acc_ref.premium_start < current_ts && *acc_ref.premium_end > current_ts) ids_by_premium_now.insert(id);
+		// std::cerr << "  index: ids_by_premium_presence" << '\n';
+		ids_by_premium_presence[acc_ref.premium_start.has_value()].insert(id);
+
+		domain.clear();
+		// std::cerr << "[+] processed" << '\n';
 	}};
+}
+
+void build_interests_intersection_index() {
+	const auto process = [](Account& acc) {
+		for (CoolHash hash : acc.interest_idcs) {
+			const set<Id>& ids = ids_by_interest[interests[hash]];
+			acc.nonzero_interest_intersection.elements.insert(
+				acc.nonzero_interest_intersection.elements.end(),
+				ids.begin(), ids.end()
+			);
+			acc.nonzero_interest_intersection.ensure_guarantees();
+		}
+		// std::vector<Id> others;
+		// for (CoolHash hash : acc.interest_idcs) {
+		// 	const set<Id>& ids = ids_by_interest[interests[hash]];
+		// 	others.insert(others.end(), ids.begin(), ids.end());
+		// }
+		// std::sort(others.begin(), others.end());
+
+		// for (
+		// 	auto range_beg = others.begin(), range_end = std::equal_range(range_beg, others.end(), *range_beg).second;
+		// 	range_beg != others.end();
+		// 	range_beg = range_end, range_end = std::equal_range(range_beg, others.end(), *range_beg).second
+		// ) {
+		// 	acc.nonzero_interest_intersection[range_end - range_beg].insert(*range_beg);
+		// }
+	};
+	for (auto& x : accounts_by_id) if (x) process(*x);
+	for (const auto& x : accounts_by_id_fallback) process(const_cast<Account&>(x.second));
+}
+
+void report() {
+	size_t cnt = 0;
+
+	std::cerr << fmt::format(
+		"fnames: {}\n"
+		"snames: {}\n"
+		"countries: {}\n"
+		"cities: {}\n"
+		"interests: {}\n",
+		fnames.size(), snames.size(),
+		countries.size(), cities.size(),
+		interests.size()
+	);
+	std::cerr << fmt::format("accounts_by_id_fallback: {}\n", accounts_by_id_fallback.size());
+
+	std::cerr << fmt::format("ids total: {}\n", ids_sorted_by_email.size());
+
+	cnt = 0; for (const auto& x : ids_by_interest) cnt += x.size();
+	std::cerr << fmt::format("ids_by_interest: {}\n", cnt);
+
+	cnt = 0; for (const auto& x : accounts_by_id) if (x) cnt += x->likes.size();
+	std::cerr << fmt::format("likes: {}\n", cnt);
 }
 
 #include <iostream>
 int main(int argc, char** argv) {
 	namespace pegtl = tao::pegtl;
-	pegtl::file_input in(argv[1]);
 
-	Account acc;
-	email_t domain;
+	Account acc{};
+	email_t domain{};
 	std::string buffer;
-	Like like;
-	pegtl::parse<pegtl::must<data_grammar::file>, data_grammar::action>(in, acc, domain, buffer, like);
+	Like like{};
+	std::vector<Like> likes;
+	for (int i = 1; i < argc; ++i) {
+		pegtl::file_input in(argv[i]);
+		pegtl::parse<pegtl::must<data_grammar::file>, data_grammar::action>(in, acc, domain, buffer, like);
+	}
+
+	build_interests_intersection_index();
+	report();
 }
 
 

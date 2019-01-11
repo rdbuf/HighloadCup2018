@@ -24,7 +24,8 @@ Rules: https://highloadcup.ru/ru/round/4/
 	- [x] premium
 	- [x] likes
 - [ ] More suitable data structures for indices
-	- [ ] Fill with actual data
+	- [x] Fill with actual data
+	- [x] Since here we have a separated stage of POST requests, we postpone the rebuilding of indices until the end. Removal of values to be performed via flags - should avoid unnecessary relocations.
 - [ ] Request parsing
 - [ ] JSON printing
 - [ ] Asio setup
@@ -40,6 +41,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 - Phone code fits into uint16_t
 - Initial data are valid
 - Prefix and code of any phone number begin with a non-zero digit, and all the parts fit into their respective bitfields of 8, 16 and 36 bits
+- Interests intersection of any two users does not exceed 20
 
 ### Imaginary database schema
 ```
@@ -65,7 +67,10 @@ CREATE TABLE Accounts (
 
 ### Requests
 #### 1. Filter
-Implemented as set intersections and unions with help from binsearch
+Implemented as set intersections and unions with help from binsearch.
+1. Collect all participating sets in intersection
+2. Sort by size
+3. Intersect in this order
 
 ```
 Sex -> Set Id

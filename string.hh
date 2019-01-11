@@ -1,0 +1,64 @@
+#pragma once
+
+#include <string_view>
+#include <cstring>
+
+#include <fmt/format.h>
+#include <iostream>
+
+template<size_t Len, size_t BytesPerSymbol>
+struct fixwstr { // unsafe fixed-width string without boundary checks
+	char str[Len*BytesPerSymbol+1];
+	char* ptr = str;
+
+	fixwstr() = default;
+	fixwstr(const char* a, size_t sz) noexcept {
+		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)a, sz);
+		std::memcpy(ptr, a, sz);
+		ptr += sz;
+	}
+	fixwstr(fixwstr&& other) noexcept {
+		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)other.str, other.size());
+		std::memcpy(ptr, other.str, other.size());
+		ptr += other.size();
+		other.clear();
+	}
+	fixwstr& operator=(fixwstr&& other) noexcept {
+		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)other.str, other.size());
+		std::memcpy(ptr, other.str, other.size());
+		ptr += other.size();
+		other.clear();
+		return *this;
+	}
+	~fixwstr() { clear(); }
+
+	void construct_from(const char* a, size_t sz) noexcept {
+		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)a, sz);
+		std::memcpy(str, a, sz);
+		str = ptr + sz;
+	}
+	void clear() { ptr = str; }
+
+	operator std::string_view() { return std::string_view(str, ptr - str); }
+	operator const std::string_view() const { return std::string_view(str, ptr - str); }
+
+	char* begin() noexcept { return str; }
+	char* end() noexcept { return ptr; }
+	const char* begin() const noexcept { return str; }
+	const char* end() const noexcept { return ptr; }
+
+	size_t size() const noexcept { return ptr - str; }
+
+	fixwstr& operator+=(char a) noexcept { *ptr++ = a; return *this; }
+	fixwstr& operator+=(const char* a) noexcept {
+		const int sz = std::strlen(a);
+		std::memcpy(ptr, a, sz);
+		ptr += sz;
+        return *this;
+	}
+
+	fixwstr& operator-=(int n) noexcept { ptr -= n; return *this; }
+
+	fixwstr& ensure_zero() noexcept { *ptr = 0; return *this; }
+    operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(str); }
+};

@@ -3,11 +3,13 @@ cmake_minimum_required(VERSION 3.8.0 FATAL_ERROR)
 project(HighloadCup2018 VERSION 0.1.0 LANGUAGES CXX)
 add_executable(HighloadCup2018 draft2.cc)
 
+target_link_libraries(HighloadCup2018 PRIVATE -lfmt)
+target_link_libraries(HighloadCup2018 PRIVATE -pg)
+
 set(PEGTL_BUILD_TESTS OFF CACHE BOOL OFF FORCE)
 set(PEGTL_BUILD_EXAMPLES OFF CACHE BOOL OFF FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third-party/PEGTL)
 target_link_libraries(HighloadCup2018 PRIVATE taocpp::pegtl)
-target_link_libraries(HighloadCup2018 PRIVATE -pg)
 
 link_directories(PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/icu/source/lib)
 target_link_libraries(pegtl INTERFACE libicuuc.a libicudata.a libicui18n.a libicuio.a libicutu.a)
