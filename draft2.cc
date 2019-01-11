@@ -75,64 +75,32 @@ std::array<set<Id>, 2> ids_by_premium_presence;
 
 int64_t current_ts;
 
-/* Helpers for parsing */
-
-#include <cstdint>
-#include <cstddef>
-#include <array>
-namespace intparsing {
-	template<unsigned char base>
-	constexpr uint64_t from_digit(char d) {
-		uint8_t result = d - '0';
-		if constexpr (base > 10) {
-			if (result >= base) result -= ('A' - '0'), result += 10;
-			if (result >= base) result -= ('a' - 'A');
-		}
-		return result;
-	}
-
-	template<unsigned char base, bool upper = false>
-	constexpr char to_digit(uint8_t d) {
-		char result = d + '0';
-		if constexpr (base > 10) {
-			if (result > '9') {
-				result -= 10;
-				if constexpr (upper) result += ('A' - '0');
-				else result += ('a' - '0');
-			}
-		}
-		return result;
-	}
-
-	constexpr uint64_t pow(uint64_t a, uint64_t b) {
-		if (b == 0) return 1;
-		return a * intparsing::pow(a, b - 1);
-	}
-
-	template<unsigned char base>
-	constexpr uint64_t readint(const char* sym, size_t num_digits) {
-		uint64_t result = 0;
-		for (size_t i = 0; i < num_digits; ++i) result += from_digit<base>(sym[num_digits-1 - i]) * intparsing::pow(base, i);
-		return result;
-	}
-
-	template<unsigned char base, size_t num_digits>
-	constexpr std::array<char, num_digits> showint(uint64_t value) {
-		std::array<char, num_digits> result;
-		for (int i = 0; i < num_digits; ++i) result[i] = to_digit<base>((value / intparsing::pow(base, num_digits-1 - i)) % base);
-		return result;
-	}
-}
+#include "parseint.hh"
 
 /* Parsers */
 
 #include <tao/pegtl.hpp>
 #include <tao/pegtl/contrib/icu/utf8.hpp>
 #include <utf8_encode.c>
-namespace data_grammar {
+namespace grammar_common {
 	namespace pegtl = tao::pegtl;
 
 	struct nat : pegtl::seq<pegtl::range<'1', '9'>, pegtl::star<pegtl::digit>> {};
+	struct wss : pegtl::star<pegtl::one<' ', '\n', '\t'>> {};
+	template<char Opening, class Rule, char Closing>
+	struct list : pegtl::seq<
+		pegtl::one<Opening>, wss,
+		pegtl::opt<pegtl::list<Rule, pegtl::one<','>, pegtl::space>>,
+		wss, pegtl::one<Closing>
+	> {};
+
+	template<class> struct email_domain : pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.'>>> {};
+	template<class tag> struct email : pegtl::seq<pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.', '-', '_'>>>, pegtl::one<'@'>, email_domain<tag>> {};
+}
+
+/*
+namespace data_grammar {
+	using namespace grammar_common;
 
 	struct unicode_escaped_char : pegtl::seq<TAO_PEGTL_STRING(R"(\u)"), pegtl::rep<4, pegtl::xdigit>> {};
 	struct unicode_regular_char : pegtl::sor<pegtl::utf8::icu::alphabetic, pegtl::digit, pegtl::ranges<0x20, 0x21, 0x23, 0x2f, 0x3a, 0x40, 0x5b, 0x60, 0x7b, 0x7e>> {};
@@ -142,13 +110,6 @@ namespace data_grammar {
 		pegtl::star<pegtl::sor<unicode_escaped_char, unicode_regular_char>>
 	>::type {};
 
-	struct wss : pegtl::star<pegtl::one<' ', '\n', '\t'>> {};
-	template<char Opening, class Rule, char Closing>
-	struct list : pegtl::seq<
-		pegtl::one<Opening>, wss,
-		pegtl::opt<pegtl::list<Rule, pegtl::one<','>, pegtl::space>>,
-		wss, pegtl::one<Closing>
-	> {};
 	template<class... Fields>
 	struct object : list<'{', pegtl::sor<Fields...>, '}'> {};
 	template<class Element>
@@ -159,16 +120,16 @@ namespace data_grammar {
 	struct field : pegtl::seq<quoted<Name>, wss, pegtl::one<':'>, wss, Value> {};
 
 	struct id : nat {};
-	struct email_domain : pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.'>>> {};
-	struct email : pegtl::seq<pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.', '-', '_'>>>, pegtl::one<'@'>, email_domain> {};
+	struct email_domain : grmr_email_domain {};
+	struct email : grmr_email {};
 	struct fname : unicode_string<> {};
 	struct sname : unicode_string<> {};
 	struct phone_prefix : nat {};
 	struct phone_code : nat {};
 	struct phone_num : pegtl::plus<pegtl::digit> {}; // is not really guaranteed - need to be careful
 	struct phone : pegtl::seq<phone_prefix, pegtl::one<'('>, phone_code, pegtl::one<')'>, phone_num> {};
-	struct sex_male : pegtl::one<'m'> {};
-	struct sex_female : pegtl::one<'f'> {};
+	struct sex_male : grmr_sex_male {};
+	struct sex_female : grmr_sex_female {};
 	struct sex : pegtl::sor<sex_male, sex_female> {};
 	struct birth : nat {};
 	struct country : unicode_string<> {};
@@ -223,17 +184,17 @@ namespace data_grammar {
 
 	template<>
 	struct action<id> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.id = intparsing::readint<10>(in.begin(), in.size());
+		acc.id = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
 	struct action<like_id> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		like.other = intparsing::readint<10>(in.begin(), in.size());
+		like.other = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
 	struct action<like_ts> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		like.net_ts = intparsing::readint<10>(in.begin(), in.size());
+		like.net_ts = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
@@ -281,38 +242,38 @@ namespace data_grammar {
 	template<>
 	struct action<phone_prefix> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.phone = phone_t{}; // init the optional
-		acc.phone->prefix = intparsing::readint<10>(in.begin(), in.size());
+		acc.phone->prefix = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
 	struct action<phone_code> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.phone->code = intparsing::readint<10>(in.begin(), in.size());
+		acc.phone->code = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
 	struct action<phone_num> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.phone->num = intparsing::readint<10>(in.begin(), in.size());
+		acc.phone->num = parseint::readint<10>(in.begin(), in.size());
 		acc.phone->num_len = in.size();
 	}};
 
 	template<>
 	struct action<birth> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.birth = intparsing::readint<10>(in.begin(), in.size());
+		acc.birth = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
 	struct action<joined> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.joined = intparsing::readint<10>(in.begin(), in.size());
+		acc.joined = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
 	struct action<premium_start> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.premium_start = intparsing::readint<10>(in.begin(), in.size());
+		acc.premium_start = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
 	struct action<premium_end> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		acc.premium_end = intparsing::readint<10>(in.begin(), in.size());
+		acc.premium_end = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
@@ -332,7 +293,6 @@ namespace data_grammar {
 
 	template<>
 	struct action<email_domain> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		// std::cerr << fmt::format("    assigning domain = {}, size = {}\n", std::string_view(in.begin(), in.size()), in.size());
 		domain = email_t(in.begin(), in.size());
 	}};
 
@@ -359,7 +319,7 @@ namespace data_grammar {
 	template<>
 	struct action<unicode_escaped_char> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		char buf[5];
-		int width = utf8_encode(buf, intparsing::readint<16>(in.begin()+2, 4));
+		int width = utf8_encode(buf, parseint::readint<16>(in.begin()+2, 4));
 		buffer.append(buf, width);
 	}};
 
@@ -367,41 +327,153 @@ namespace data_grammar {
 	struct action<account> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		Id id = acc.id;
 
-		// std::cerr << "[.] processing " << id << '\n';
 
 		const Account& acc_ref = accounts_by_id[id] = std::move(acc);
 		acc = Account{};
 
-		// std::cerr << "  index: ids_by_sex" << '\n';
 		ids_by_sex[acc_ref.sex].insert(id);
-		// std::cerr << fmt::format("  index: ids_by_domain (domain = {}, len = {}, str = {}, ptr = {})\n", domain, domain.size(), (void*)domain.str, (void*)domain.ptr);
 		ids_by_domain[domain].insert(id);
-		// std::cerr << "  index: ids_sorted_by_email" << '\n';
 		if (acc_ref.email) ids_sorted_by_email.insert(id);
-		// std::cerr << "  index: ids_by_status" << '\n';
 		ids_by_status[acc_ref.status].insert(id);
-		// std::cerr << "  index: ids_by_fname" << '\n';
 		if (acc_ref.fname_idx) ids_by_fname[fnames[*acc_ref.fname_idx]].insert(id);
-		// std::cerr << "  index: ids_by_sname" << '\n';
 		if (acc_ref.sname_idx) ids_by_sname[snames[*acc_ref.sname_idx]].insert(id);
-		// std::cerr << "  index: ids_by_code" << '\n';
 		if (acc_ref.phone) ids_by_code[acc_ref.phone->code].insert(id);
-		// std::cerr << "  index: ids_by_phone_presence" << '\n';
 		ids_by_phone_presence[acc_ref.phone.has_value()].insert(id);
-		// std::cerr << "  index: ids_by_country" << '\n';
 		if (acc_ref.country_idx) ids_by_country[countries[*acc_ref.country_idx]].insert(id);
-		// std::cerr << "  index: ids_by_city" << '\n';
 		if (acc_ref.city_idx) ids_by_city[cities[*acc_ref.city_idx]].insert(id);
-		// std::cerr << "  index: ids_by_interest" << '\n';
 		for (const CoolHash hash : acc_ref.interest_idcs) ids_by_interest[interests[hash]].insert(id);
-		// std::cerr << "  index: ids_by_premium_now" << '\n';
 		if (*acc_ref.premium_start < current_ts && *acc_ref.premium_end > current_ts) ids_by_premium_now.insert(id);
-		// std::cerr << "  index: ids_by_premium_presence" << '\n';
 		ids_by_premium_presence[acc_ref.premium_start.has_value()].insert(id);
 
 		domain.clear();
-		// std::cerr << "[+] processed" << '\n';
 	}};
+}
+*/
+
+namespace request_grammar {
+	namespace pegtl = tao::pegtl;
+
+	template<class> struct nat : pegtl::seq<pegtl::range<'1', '9'>, pegtl::star<pegtl::digit>> {};
+	template<class Key, class Value>
+	struct param : pegtl::seq<Key, pegtl::one<'='>, Value> {};
+	template<class... Params>
+	struct params : pegtl::list<pegtl::sor<Params...>, pegtl::one<'&'>> {};
+	struct crlf : TAO_PEGTL_STRING("\r\n") {};
+	struct http_version : pegtl::seq<TAO_PEGTL_STRING(" HTTP/1.1"), crlf> {};
+	template<class Key, class Value>
+	struct header : pegtl::seq<Key, TAO_PEGTL_STRING(": "), Value, crlf> {};
+	struct conn_close : TAO_PEGTL_ISTRING("close") {};
+	struct conn_keepalive : TAO_PEGTL_ISTRING("keep-alive") {};
+	struct headers : pegtl::until<pegtl::seq<crlf, crlf>, pegtl::sor<
+		header<TAO_PEGTL_ISTRING("Connection"), pegtl::sor<conn_keepalive, conn_close>>,
+		pegtl::seq<pegtl::until<crlf>, crlf>
+	>> {};
+
+	template<class> struct email_domain : pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.'>>> {};
+	template<class tag> struct email : pegtl::seq<pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.', '-', '_'>>>, pegtl::one<'@'>, email_domain<tag>> {};
+
+	template<class> struct sex_male : pegtl::one<'m'> {};
+	template<class> struct sex_female : pegtl::one<'f'> {};
+	template<class tag> struct sex : pegtl::sor<sex_male<tag>, sex_female<tag>> {};
+
+	template<class> struct urlescaped_char : pegtl::seq<pegtl::one<'%'>, pegtl::rep<2, pegtl::xdigit>> {};
+	template<class> struct urlescaped_whitespace : pegtl::one<'+'> {};
+	template<class> struct urlallowed_char : pegtl::sor<pegtl::alnum, pegtl::one<'-', '.', '_', '~'>> {};
+	template<class tag> struct urlescaped_string : pegtl::plus<pegtl::sor<urlallowed_char<tag>, urlescaped_char<tag>, urlescaped_whitespace<tag>>> {};
+
+	template<class> struct status_single : TAO_PEGTL_STRING("%D1%81%D0%B2%D0%BE%D0%B1%D0%BE%D0%B4%D0%BD%D1%8B") {};
+	template<class> struct status_relationship : TAO_PEGTL_STRING("%D0%B7%D0%B0%D0%BD%D1%8F%D1%82%D1%8B") {};
+	template<class> struct status_undecided : TAO_PEGTL_STRING("%D0%B2%D1%81%D1%91%20%D1%81%D0%BB%D0%BE%D0%B6%D0%BD%D0%BE") {};
+	template<class tag> struct status : pegtl::sor<status_undecided<tag>, status_relationship<tag>, status_single<tag>> {};
+
+	template<class> struct null_0 : pegtl::one<'0'> {};
+	template<class> struct null_1 : pegtl::one<'1'> {};
+	template<class tag> struct null : pegtl::sor<null_0<tag>, null_1<tag>> {};
+
+	template<template<class> class Item, class Sep, class tag> struct list : pegtl::list<Item<tag>, Sep> {};
+
+	template<class> struct year : pegtl::rep<4, pegtl::digit> {};
+
+	struct sex_eq_tag {};
+	struct email_domain_tag {};
+	struct email_lt_tag {};
+	struct email_gt_tag {};
+	struct status_eq_tag {};
+	struct status_neq_tag {};
+	struct sname_eq_tag {};
+	struct sname_starts_tag {};
+	struct sname_null_tag {};
+	struct phone_code_tag {};
+	struct phone_null_tag {};
+	struct country_eq_tag {};
+	struct country_null_tag {};
+	struct city_eq_tag {};
+	struct city_any_tag {};
+	struct city_null_tag {};
+	struct birth_lt_tag {};
+	struct birth_gt_tag {};
+	struct birth_year_tag {};
+	struct interests_contains_tag {};
+	struct interests_any_tag {};
+	struct likes_contains_tag {};
+	struct premium_now_tag {};
+	struct premium_null_tag {};
+	struct query_id_tag {};
+	struct limit_tag {};
+
+	struct newacc : pegtl::any {};
+	struct updacc : pegtl::any {};
+	struct newlikes : pegtl::any {};
+	struct id_tag {};
+	struct request : pegtl::sor<
+		pegtl::seq<TAO_PEGTL_STRING("GET /accounts/"), pegtl::sor<
+			pegtl::seq<TAO_PEGTL_STRING("filter/?"), params<
+				param<TAO_PEGTL_STRING("sex_eq"), sex<sex_eq_tag>>,
+				param<TAO_PEGTL_STRING("email_domain"), email_domain<email_domain_tag>>,
+				param<TAO_PEGTL_STRING("email_lt"), email<email_lt_tag>>,
+				param<TAO_PEGTL_STRING("email_gt"), email<email_gt_tag>>,
+				param<TAO_PEGTL_STRING("status_eq"), status<status_eq_tag>>,
+				param<TAO_PEGTL_STRING("status_neq"), status<status_neq_tag>>,
+				param<TAO_PEGTL_STRING("sname_eq"), urlescaped_string<sname_eq_tag>>,
+				param<TAO_PEGTL_STRING("sname_starts"), urlescaped_string<sname_starts_tag>>,
+				param<TAO_PEGTL_STRING("sname_null"), null<sname_null_tag>>,
+				param<TAO_PEGTL_STRING("phone_code"), nat<phone_code_tag>>,
+				param<TAO_PEGTL_STRING("phone_null"), null<phone_null_tag>>,
+				param<TAO_PEGTL_STRING("country_eq"), urlescaped_string<country_eq_tag>>,
+				param<TAO_PEGTL_STRING("country_null"), null<country_null_tag>>,
+				param<TAO_PEGTL_STRING("city_eq"), urlescaped_string<city_eq_tag>>,
+				param<TAO_PEGTL_STRING("city_any"), list<urlescaped_string, pegtl::one<','>, city_any_tag>>,
+				param<TAO_PEGTL_STRING("city_null"), null<city_null_tag>>,
+				param<TAO_PEGTL_STRING("birth_lt"), nat<birth_lt_tag>>,
+				param<TAO_PEGTL_STRING("birth_gt"), nat<birth_gt_tag>>,
+				param<TAO_PEGTL_STRING("birth_year"), year<birth_year_tag>>,
+				param<TAO_PEGTL_STRING("interests_contains"), list<urlescaped_string, pegtl::one<','>, interests_contains_tag>>,
+				param<TAO_PEGTL_STRING("interests_any"), list<urlescaped_string, pegtl::one<','>, interests_any_tag>>,
+				param<TAO_PEGTL_STRING("likes_contains"), list<nat, pegtl::one<','>, likes_contains_tag>>,
+				param<TAO_PEGTL_STRING("premium_now"), nat<premium_now_tag>>,
+				param<TAO_PEGTL_STRING("premium_null"), nat<premium_null_tag>>,
+				param<TAO_PEGTL_STRING("query_id"), nat<query_id_tag>>,
+				param<TAO_PEGTL_STRING("limit"), nat<limit_tag>>
+			>>,
+			pegtl::seq<TAO_PEGTL_STRING("group/?"), params<
+				// ...
+			>>,
+			pegtl::seq<nat<id_tag>, pegtl::sor<
+				pegtl::seq<TAO_PEGTL_STRING("/recommend/?"), params<
+					// ...
+				>>,
+				pegtl::seq<TAO_PEGTL_STRING("/suggest/?"), params<
+					// ...
+				>>
+			>>
+		>>,
+		pegtl::seq<TAO_PEGTL_STRING("POST /accounts/"), pegtl::sor<
+			pegtl::seq<TAO_PEGTL_STRING("new/"), http_version, headers, newacc>,
+			pegtl::seq<nat<id_tag>, pegtl::one<'/'>, http_version, headers, updacc>,
+			pegtl::seq<TAO_PEGTL_STRING("likes/"), http_version, headers, newlikes>
+		>>
+	> {};
+
 }
 
 void report() {
@@ -436,8 +508,8 @@ void build_likers() {
 	});
 }
 
+/*
 #include <iostream>
-#include <filesystem>
 int main(int argc, char** argv) {
 	namespace pegtl = tao::pegtl;
 
@@ -454,92 +526,13 @@ int main(int argc, char** argv) {
 	build_likers();
 	report();
 }
-
-
-/*
-namespace query_grammar {
-	namespace pegtl = tao::pegtl::ascii;
-
-	// std::vector<std::string_view> column_names;
-	// std::vector<string_with_hole> query;
-	// int limit;
-
-	struct sex : pegtl::string<'s', 'e', 'x'> {};
-	struct email : pegtl::string<'e', 'm', 'a', 'i', 'l'> {};
-	struct status : pegtl::string<'s', 't', 'a', 't', 'u', 's'> {};
-	struct fname : pegtl::string<'f', 'n', 'a', 'm', 'e'> {};
-	struct sname : pegtl::string<'s', 'n', 'a', 'm', 'e'> {};
-	struct phone : pegtl::string<'p', 'h', 'o', 'n', 'e'> {};
-	struct country : pegtl::string<'c', 'o', 'u', 'n', 't', 'r', 'y'> {};
-	struct city : pegtl::string<'c', 'i', 't', 'y'> {};
-	struct birth : pegtl::string<'b', 'i', 'r', 't', 'h'> {};
-	struct interests : pegtl::string<'i', 'n', 't', 'e', 'r', 'e', 's', 't', 's'> {};
-	struct likes : pegtl::string<'l', 'i', 'k', 'e', 's'> {};
-	struct premium : pegtl::string<'p', 'r', 'e', 'm', 'i', 'u', 'm'> {};
-	// those manually unrolled strings could possibly be replaced with TAO_PEGTL_STRING invocations - TBI
-	struct eq : pegtl::string<'e', 'q'> {};
-	struct domain : pegtl::string<'d', 'o', 'm', 'a', 'i', 'n'> {};
-	struct lt : pegtl::string<'l', 't'> {};
-	struct gt : pegtl::string<'g', 't'> {};
-	struct neq : pegtl::string<'n', 'e', 'q'> {};
-	struct any : pegtl::string<'a', 'n', 'y'> {};
-	struct null : pegtl::string<'n', 'u', 'l', 'l'> {};
-	struct starts : pegtl::string<'s', 't', 'a', 'r', 't', 's'> {};
-	struct code : pegtl::string<'c', 'o', 'd', 'e'> {};
-	struct year : pegtl::string<'y', 'e', 'a', 'r'> {};
-	struct contains : pegtl::string<'c', 'o', 'n', 't', 'a', 'i', 'n', 's'> {};
-	struct now : pegtl::string<'n', 'o', 'w'> {};
-
-	struct sex_eq : pegtl::seq<sex, pegtl::one<'_'>, eq> {};
-	struct email_domain : pegtl::seq<email, pegtl::one<'_'>, domain> {};
-	struct email_lt : pegtl::seq<email, pegtl::one<'_'>, lt> {};
-	struct email_gt : pegtl::seq<email, pegtl::one<'_'>, gt> {};
-	struct status_eq : pegtl::seq<status, pegtl::one<'_'>, eq> {};
-	struct status_neq : pegtl::seq<status, pegtl::one<'_'>, neq> {};
-	struct fname_eq : pegtl::seq<fname, pegtl::one<'_'>, eq> {};
-	struct fname_any : pegtl::seq<fname, pegtl::one<'_'>, any> {};
-	struct fname_null : pegtl::seq<fname, pegtl::one<'_'>, null> {};
-	struct sname_eq : pegtl::seq<sname, pegtl::one<'_'>, eq> {};
-	struct sname_starts : pegtl::seq<sname, pegtl::one<'_'>, starts> {};
-	struct sname_null : pegtl::seq<sname, pegtl::one<'_'>, null> {};
-	struct phone_code : pegtl::seq<phone, pegtl::one<'_'>, code> {};
-	struct phone_null : pegtl::seq<phone, pegtl::one<'_'>, null> {};
-	struct country_eq : pegtl::seq<country, pegtl::one<'_'>, eq> {};
-	struct country_null : pegtl::seq<country, pegtl::one<'_'>, null> {};
-	struct city_eq : pegtl::seq<city, pegtl::one<'_'>, eq> {};
-	struct city_any : pegtl::seq<city, pegtl::one<'_'>, any> {};
-	struct city_null : pegtl::seq<city, pegtl::one<'_'>, null> {};
-	struct birth_lt : pegtl::seq<birth, pegtl::one<'_'>, lt> {};
-	struct birth_gt : pegtl::seq<birth, pegtl::one<'_'>, gt> {};
-	struct birth_year : pegtl::seq<birth, pegtl::one<'_'>, year> {};
-	struct interests_contains : pegtl::seq<interests, pegtl::one<'_'>, contains> {};
-	struct interests_any : pegtl::seq<interests, pegtl::one<'_'>, any> {};
-	struct likes_contains : pegtl::seq<likes, pegtl::one<'_'>, contains> {};
-	struct premium_now : pegtl::seq<premium, pegtl::one<'_'>, now> {};
-	struct premium_null : pegtl::seq<premium, pegtl::one<'_'>, null> {};
-
-	struct query_id : pegtl::string<'q', 'u', 'e', 'r', 'y', '_', 'i', 'd'> {};
-	struct limit : pegtl::string<'l', 'i', 'm', 'i', 't'> {};
-
-	struct percent_encoded_ws : pegtl::one<'+'> {};
-	struct percent_encoded_byte : pegtl::seq<pegtl::one<'%'>, pegtl::two<pegtl::xdigit>> {};
-	struct percent_encoded_string : pegtl::star<pegtl::sor<percent_encoded_ws, percent_encoded_byte>> {};
-
-	struct phone_code : pegtl::three<pegtl::digit> {};
-	struct phone_number : pegtl::seq<pegtl::plus<pegtl::digit>, pegtl::one<'('>, phone_code, pegtl::one<')'>, pegtl::plus<pegtl::digit>> {};
-
-	struct email_domain : pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.'>>> {};
-	struct email : pegtl::seq<pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.', '-', '_'>>>>, pegtl::one<'@'>> {};
-
-	struct birth_year_ : pegtl::seq<pegtl::digit, pegtl::digit, pegtl::digit, pegtl::digit> {};
-
-	struct city_list
-	struct interests_list
-	struct likes_list
-
-	// we just write a distinct rhs for every field-selector pair and act correspondingly in their apply methods
-
-	template<class Rule>
-	struct action : pegtl::nothing<Rule> {};
-}
 */
+
+#include <iostream>
+int main(int argc, char** argv) {
+	namespace pegtl = tao::pegtl;
+	pegtl::file_input in(argv[1]);
+
+	using namespace request_grammar;
+	pegtl::parse<pegtl::must<request_grammar::request>>(in);
+}
