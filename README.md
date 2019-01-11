@@ -8,24 +8,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 
 ### Roadmap
 - [x] Indices
-	- [ ] For each id, keep track of the users with non-zero interests intersection: there won't be many
 - [x] JSON parsing
-	- [x] email
-	- [x] fname
-	- [x] sname
-	- [x] phone
-	- [x] sex
-	- [x] birth
-	- [x] country
-	- [x] city
-	- [x] joined
-	- [x] status
-	- [x] interests
-	- [x] premium
-	- [x] likes
-- [ ] More suitable data structures for indices
-	- [x] Fill with actual data
-	- [x] Since here we have a separated stage of POST requests, we postpone the rebuilding of indices until the end. Removal of values to be performed via flags - should avoid unnecessary relocations.
 - [ ] Request parsing
 - [ ] JSON printing
 - [ ] Asio setup
@@ -42,6 +25,12 @@ Rules: https://highloadcup.ru/ru/round/4/
 - Initial data are valid
 - Prefix and code of any phone number begin with a non-zero digit, and all the parts fit into their respective bitfields of 8, 16 and 36 bits
 - Interests intersection of any two users does not exceed 20
+- IDNs are not involved (https://en.wikipedia.org/wiki/Internationalized_domain_name)
+
+### Thanks
+Utilities that saved me a lot of time:
+- valgrind
+- pegtl
 
 ### Imaginary database schema
 ```

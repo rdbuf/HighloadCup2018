@@ -82,10 +82,12 @@ int64_t current_ts;
 #include <tao/pegtl.hpp>
 #include <tao/pegtl/contrib/icu/utf8.hpp>
 #include <utf8_encode.c>
-namespace grammar_common {
+
+namespace account_grammar {
 	namespace pegtl = tao::pegtl;
 
-	struct nat : pegtl::seq<pegtl::range<'1', '9'>, pegtl::star<pegtl::digit>> {};
+	struct fini {};
+
 	struct wss : pegtl::star<pegtl::one<' ', '\n', '\t'>> {};
 	template<char Opening, class Rule, char Closing>
 	struct list : pegtl::seq<
@@ -94,21 +96,14 @@ namespace grammar_common {
 		wss, pegtl::one<Closing>
 	> {};
 
-	template<class> struct email_domain : pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.'>>> {};
-	template<class tag> struct email : pegtl::seq<pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.', '-', '_'>>>, pegtl::one<'@'>, email_domain<tag>> {};
-}
+	template<class> struct nat : pegtl::seq<pegtl::range<'1', '9'>, pegtl::star<pegtl::digit>> {};
 
-/*
-namespace data_grammar {
-	using namespace grammar_common;
+	struct email_domain : pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.'>>> {};
+	struct email : pegtl::seq<pegtl::plus<pegtl::sor<pegtl::alnum, pegtl::one<'.', '-', '_'>>>, pegtl::one<'@'>, email_domain> {};
 
 	struct unicode_escaped_char : pegtl::seq<TAO_PEGTL_STRING(R"(\u)"), pegtl::rep<4, pegtl::xdigit>> {};
 	struct unicode_regular_char : pegtl::sor<pegtl::utf8::icu::alphabetic, pegtl::digit, pegtl::ranges<0x20, 0x21, 0x23, 0x2f, 0x3a, 0x40, 0x5b, 0x60, 0x7b, 0x7e>> {};
-	template<bool nonempty = false>
-	struct unicode_string : std::conditional<nonempty,
-		pegtl::plus<pegtl::sor<unicode_escaped_char, unicode_regular_char>>,
-		pegtl::star<pegtl::sor<unicode_escaped_char, unicode_regular_char>>
-	>::type {};
+	template<class tag> struct unicode_string : pegtl::star<pegtl::sor<unicode_escaped_char, unicode_regular_char>> {};
 
 	template<class... Fields>
 	struct object : list<'{', pegtl::sor<Fields...>, '}'> {};
@@ -119,22 +114,34 @@ namespace data_grammar {
 	template<class Name, class Value>
 	struct field : pegtl::seq<quoted<Name>, wss, pegtl::one<':'>, wss, Value> {};
 
-	struct id : nat {};
-	struct email_domain : grmr_email_domain {};
-	struct email : grmr_email {};
-	struct fname : unicode_string<> {};
-	struct sname : unicode_string<> {};
-	struct phone_prefix : nat {};
-	struct phone_code : nat {};
-	struct phone_num : pegtl::plus<pegtl::digit> {}; // is not really guaranteed - need to be careful
-	struct phone : pegtl::seq<phone_prefix, pegtl::one<'('>, phone_code, pegtl::one<')'>, phone_num> {};
-	struct sex_male : grmr_sex_male {};
-	struct sex_female : grmr_sex_female {};
+ 	struct id_tag {};
+	struct email_tag {};
+	struct fname_tag {};
+	struct sname_tag {};
+
+	template<class> struct integer_sequence : pegtl::plus<pegtl::digit> {};
+
+	struct phone_prefix_tag {};
+	struct phone_code_tag {};
+	struct phone_num_tag {};
+	struct phone : pegtl::seq<
+		nat<phone_prefix_tag>,
+		pegtl::one<'('>, nat<phone_code_tag>, pegtl::one<')'>,
+		integer_sequence<phone_num_tag>
+	> {};
+
+	struct sex_male : pegtl::one<'m'> {};
+	struct sex_female : pegtl::one<'f'> {};
 	struct sex : pegtl::sor<sex_male, sex_female> {};
-	struct birth : nat {};
-	struct country : unicode_string<> {};
-	struct city : unicode_string<> {};
-	struct joined : nat {};
+
+	struct birth_tag {};
+	struct country_tag {};
+	struct city_tag {};
+	struct joined_tag {};
+	struct phone_tag {};
+	struct sex_tag {};
+	struct status_tag {};
+
 	struct status_single : pegtl::sor<
 		pegtl::seq<pegtl::one<0xd1>, pegtl::one<0x81>, pegtl::one<0xd0>, pegtl::one<0xb2>, pegtl::one<0xd0>, pegtl::one<0xbe>, pegtl::one<0xd0>, pegtl::one<0xb1>, pegtl::one<0xd0>, pegtl::one<0xbe>, pegtl::one<0xd0>, pegtl::one<0xb4>, pegtl::one<0xd0>, pegtl::one<0xbd>, pegtl::one<0xd1>, pegtl::one<0x8b>>, // "свободны"
 		TAO_PEGTL_STRING(R"(\u0441\u0432\u043e\u0431\u043e\u0434\u043d\u044b)")
@@ -148,32 +155,38 @@ namespace data_grammar {
 		TAO_PEGTL_STRING(R"(\u0432\u0441\u0451 \u0441\u043b\u043e\u0436\u043d\u043e)")
 	> {};
 	struct status : pegtl::sor<status_single, status_relationship, status_undecided> {};
-	struct interest : unicode_string<true> {};
-	struct premium_start : nat {};
-	struct premium_end : nat {};
-	struct like_id : nat {};
-	struct like_ts : nat {};
+
+	struct interest_tag {};
+	struct premium_start_tag {};
+	struct premium_end_tag {};
+	struct likee_id_tag {};
+	struct like_ts_tag {};
+
 	struct like : object<
-		field<TAO_PEGTL_STRING("id"), like_id>,
-		field<TAO_PEGTL_STRING("ts"), like_ts>
+		field<TAO_PEGTL_STRING("id"), nat<likee_id_tag>>,
+		field<TAO_PEGTL_STRING("ts"), nat<like_ts_tag>>
 	> {};
 
+	/* Syntactic constructions such as { ... }, [ ... ], key: value, etc. Those are not to be templated. */
+	/* Primitive types such as nat, unicode_string, etc. To be heavily templated. */
+	/* Aggregates - ??? Ah, ok: we just template tags and that's it. */
+
 	struct account : object<
-		field<TAO_PEGTL_STRING("id"), id>,
+		field<TAO_PEGTL_STRING("id"), nat<id_tag>>,
 		field<TAO_PEGTL_STRING("email"), quoted<email>>,
-		field<TAO_PEGTL_STRING("fname"), quoted<fname>>,
-		field<TAO_PEGTL_STRING("sname"), quoted<sname>>,
+		field<TAO_PEGTL_STRING("fname"), quoted<unicode_string<fname_tag>>>,
+		field<TAO_PEGTL_STRING("sname"), quoted<unicode_string<sname_tag>>>,
 		field<TAO_PEGTL_STRING("phone"), quoted<phone>>,
 		field<TAO_PEGTL_STRING("sex"), quoted<sex>>,
-		field<TAO_PEGTL_STRING("birth"), birth>,
-		field<TAO_PEGTL_STRING("country"), quoted<country>>,
-		field<TAO_PEGTL_STRING("city"), quoted<city>>,
-		field<TAO_PEGTL_STRING("joined"), joined>,
+		field<TAO_PEGTL_STRING("birth"), nat<birth_tag>>,
+		field<TAO_PEGTL_STRING("country"), quoted<unicode_string<country_tag>>>,
+		field<TAO_PEGTL_STRING("city"), quoted<unicode_string<city_tag>>>,
+		field<TAO_PEGTL_STRING("joined"), nat<joined_tag>>,
 		field<TAO_PEGTL_STRING("status"), quoted<status>>,
-		field<TAO_PEGTL_STRING("interests"), array<quoted<interest>>>,
+		field<TAO_PEGTL_STRING("interests"), array<quoted<unicode_string<interest_tag>>>>,
 		field<TAO_PEGTL_STRING("premium"), object<
-			field<TAO_PEGTL_STRING("start"), premium_start>,
-			field<TAO_PEGTL_STRING("finish"), premium_end>
+			field<TAO_PEGTL_STRING("start"), nat<premium_start_tag>>,
+			field<TAO_PEGTL_STRING("finish"), nat<premium_end_tag>>
 		>>,
 		field<TAO_PEGTL_STRING("likes"), array<like>>
 	> {};
@@ -183,17 +196,17 @@ namespace data_grammar {
 	struct action : pegtl::nothing<Rule> {};
 
 	template<>
-	struct action<id> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<id_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.id = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
-	struct action<like_id> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<likee_id_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		like.other = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
-	struct action<like_ts> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<like_ts_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		like.net_ts = parseint::readint<10>(in.begin(), in.size());
 	}};
 
@@ -204,35 +217,35 @@ namespace data_grammar {
 	}};
 
 	template<>
-	struct action<fname> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<unicode_string<fname_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		CoolHash h = *(acc.fname_idx = coolhash(buffer.c_str(), buffer.length()));
 		if (fnames.find(h) == fnames.end()) fnames[h] = name_t(buffer.c_str(), buffer.length());
 		buffer.clear();
 	}};
 
 	template<>
-	struct action<sname> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<unicode_string<sname_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		CoolHash h = *(acc.sname_idx = coolhash(buffer.c_str(), buffer.length()));
 		if (snames.find(h) == snames.end()) snames[h] = name_t(buffer.c_str(), buffer.length());
 		buffer.clear();
 	}};
 
 	template<>
-	struct action<country> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<unicode_string<country_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		CoolHash h = *(acc.country_idx = coolhash(buffer.c_str(), buffer.length()));
 		if (countries.find(h) == countries.end()) countries[h] = country_t(buffer.c_str(), buffer.length());
 		buffer.clear();
 	}};
 
 	template<>
-	struct action<city> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<unicode_string<city_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		CoolHash h = *(acc.city_idx = coolhash(buffer.c_str(), buffer.length()));
 		if (cities.find(h) == cities.end()) cities[h] = city_t(buffer.c_str(), buffer.length());
 		buffer.clear();
 	}};
 
 	template<>
-	struct action<interest> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<unicode_string<interest_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		CoolHash h = coolhash(buffer.c_str(), buffer.length());
 		acc.interest_idcs.insert(h);
 		if (interests.find(h) == interests.end()) interests[h] = interest_t(buffer.c_str(), buffer.length());
@@ -240,39 +253,39 @@ namespace data_grammar {
 	}};
 
 	template<>
-	struct action<phone_prefix> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<phone_prefix_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.phone = phone_t{}; // init the optional
 		acc.phone->prefix = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
-	struct action<phone_code> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<phone_code_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.phone->code = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
-	struct action<phone_num> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<integer_sequence<phone_num_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.phone->num = parseint::readint<10>(in.begin(), in.size());
 		acc.phone->num_len = in.size();
 	}};
 
 	template<>
-	struct action<birth> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<birth_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.birth = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
-	struct action<joined> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<joined_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.joined = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
-	struct action<premium_start> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<premium_start_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.premium_start = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<>
-	struct action<premium_end> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
+	struct action<nat<premium_end_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.premium_end = parseint::readint<10>(in.begin(), in.size());
 	}};
 
@@ -327,7 +340,6 @@ namespace data_grammar {
 	struct action<account> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		Id id = acc.id;
 
-
 		const Account& acc_ref = accounts_by_id[id] = std::move(acc);
 		acc = Account{};
 
@@ -348,7 +360,6 @@ namespace data_grammar {
 		domain.clear();
 	}};
 }
-*/
 
 namespace request_grammar {
 	namespace pegtl = tao::pegtl;
@@ -508,31 +519,25 @@ void build_likers() {
 	});
 }
 
-/*
 #include <iostream>
 int main(int argc, char** argv) {
 	namespace pegtl = tao::pegtl;
+	if (*argv[1] == 'j') {
+		Account acc{};
+		email_t domain{};
+		std::string buffer;
+		Like like{};
+		std::vector<Like> likes;
+		for (int i = 2; i < argc; ++i) {
+			pegtl::file_input in(argv[i]);
+			pegtl::parse<pegtl::must<account_grammar::file>, account_grammar::action>(in, acc, domain, buffer, like);
+		}
 
-	Account acc{};
-	email_t domain{};
-	std::string buffer;
-	Like like{};
-	std::vector<Like> likes;
-	for (int i = 1; i < argc; ++i) {
-		pegtl::file_input in(argv[i]);
-		pegtl::parse<pegtl::must<data_grammar::file>, data_grammar::action>(in, acc, domain, buffer, like);
+		build_likers();
+		report();
+	} else if (*argv[1] == 'r') {
+		pegtl::file_input in(argv[2]);
+		using namespace request_grammar;
+		pegtl::parse<pegtl::must<request_grammar::request>>(in);
 	}
-
-	build_likers();
-	report();
-}
-*/
-
-#include <iostream>
-int main(int argc, char** argv) {
-	namespace pegtl = tao::pegtl;
-	pegtl::file_input in(argv[1]);
-
-	using namespace request_grammar;
-	pegtl::parse<pegtl::must<request_grammar::request>>(in);
 }
