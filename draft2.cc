@@ -1,5 +1,6 @@
 #include <string>
 #include <iostream>
+#include <mutex>
 
 #define FMT_STRING_ALIAS 1
 #include <fmt/format.h>
@@ -28,9 +29,13 @@ tsl::hopscotch_map<CoolHash, interest_t> interests;
 #include <tsl/array_map.h>
 #include <tsl/htrie_map.h>
 #include <unordered_map>
-struct {
-	std::array<std::optional<Account>, 1600000> static_; // ids are considered mostly contiguous
+struct accounts_store_t {
+	constexpr static size_t N = 1600000;
+
+	std::array<std::optional<Account>, N> static_; // ids are considered mostly contiguous
+	std::array<std::mutex, N> mutexes;
 	tsl::hopscotch_map<Id, Account> dynamic;
+	std::mutex mutex_dynamic;
 
 	template<class F>
 	void foreach(F f) {
@@ -46,21 +51,30 @@ struct {
 			return dynamic[idx];
 		}
 	}
+
+	template<class F>
+	void threadsafe_apply_to(Id idx, F fun) {
+		if (idx < static_.size()) {
+			std::lock_guard lock(mutexes[idx]);
+			if (!static_[idx]) static_[idx] = Account{};
+			fun(*static_[idx]);
+		} else {
+			std::lock_guard lock(mutex_dynamic);
+			fun(dynamic[idx]);
+		}
+	}
 } accounts_by_id;
-// candidate for set<Id> ids_with_female_gender;
-std::array<set<Id>, 2> ids_by_sex; // to be accessed via sex_t
-tsl::array_map<char, set<Id>> ids_by_domain; // to be used with insert_ks
-struct cmp_id_by_email { bool operator()(Id a, Id b) { // all optionals are assumed to be present
+std::array<set<Id>, 2> ids_by_sex;
+tsl::array_map<char, set<Id>> ids_by_domain;
+struct cmp_id_by_email { bool operator()(Id a, Id b) {
 	return *accounts_by_id[a].email < *accounts_by_id[b].email;
 }};
 set<Id, cmp_id_by_email> ids_sorted_by_email;
-// candidate for array<set<Id>, 2> ids_by_nonfree_status
-std::array<set<Id>, 3> ids_by_status; // to be accessed via status_t
+std::array<set<Id>, 3> ids_by_status;
 tsl::array_map<char, set<Id>> ids_by_fname;
 tsl::htrie_map<char, set<Id>> ids_by_sname;
 tsl::hopscotch_map<uint16_t, set<Id>> ids_by_code;
-// candidate for set<Id> ids_with_phone
-std::array<set<Id>, 2> ids_by_phone_presence; // to be accessed via presence_t
+std::array<set<Id>, 2> ids_by_phone_presence;
 tsl::array_map<char, set<Id>> ids_by_country;
 tsl::array_map<char, set<Id>> ids_by_city;
 struct cmp_id_by_birth { bool operator()(Id a, Id b) { // all optionals are assumed to be present
@@ -68,10 +82,12 @@ struct cmp_id_by_birth { bool operator()(Id a, Id b) { // all optionals are assu
 }};
 set<Id, cmp_id_by_birth> ids_sorted_by_birth;
 tsl::array_map<char, set<Id>> ids_by_interest;
-// candidate for set<Id> ids_with_premium_now
 set<Id> ids_by_premium_now;
-// candidate for set<Id> ids_with_premium
 std::array<set<Id>, 2> ids_by_premium_presence;
+
+#include <tsl/hopscotch_set.h>
+tsl::hopscotch_set<uint64_t> existing_phones;
+tsl::array_set<char> existing_emails; // data duplication - be careful
 
 int64_t current_ts;
 
@@ -573,7 +589,6 @@ namespace request_grammar {
 			pegtl::seq<TAO_PEGTL_STRING("likes/?"), query_id, http_version, headers, newlikes>
 		>>
 	> {};
-
 }
 
 void report() {

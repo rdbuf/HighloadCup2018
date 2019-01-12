@@ -10,9 +10,12 @@ Rules: https://highloadcup.ru/ru/round/4/
 - [x] Indices
 - [x] JSON parsing
 - [ ] Request parsing
+	- [x] Lexing
+	- [ ] Evaluation
 - [ ] JSON printing
 - [ ] Asio setup
 - [ ] Perf setup (inside of Docker)
+- [ ] removal, locks, uniqueness
 
 ### Assumptions
 - Names only contain cyrillic symbols

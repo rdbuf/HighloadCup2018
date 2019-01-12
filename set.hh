@@ -1,45 +1,40 @@
 #pragma once
 
-template<bool>
-struct enriched {};
-
-// template<>
-// struct enriched<true> {
-// 	field_name_t field_name;
-// }
-
 #include <vector>
 #include <algorithm>
 #include <functional>
-template<class T, class Comparator = std::less<T>, bool Enrich = true>
-struct set : enriched<Enrich> {
-	std::vector<T> elements;
+template<class T, class Comparator = std::less<T>>
+struct set {
+	mutable std::vector<T> elements;
+	mutable std::vector<T> removal_queue;
 	Comparator cmp;
 	bool universe = false;
-	bool invariant_holds = true;
+	mutable bool invariant_holds = true;
 
 	set() = default;
     // set(std::initializer_list<T>&& il) : elements(il.begin(), il.end()) {}
 	// set(typename std::vector<T>::iterator it1, typename std::vector<T>::iterator it2) : elements(it1, it2) {}
 
-	set& ensure_guarantees() {
+	void ensure_guarantees() const {
 		if (!invariant_holds) {
 			std::sort(elements.begin(), elements.end(), cmp);
 			elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
-			elements.shrink_to_fit();
 		}
-		return *this;
+		for (auto x : removal_queue) {
+      		auto it = std::lower_bound(elements.begin(), elements.end(), x);
+      		assert(*it == x);
+      		elements.erase(it);
+    	}
+    	removal_queue.clear();
 	}
 
-	// set& insert(T value) {
-	// 	ensure_guarantees();
-	// 	auto it = std::lower(elements.begin(), elements.end(), value);
-	// 	if (*it != value) elements.insert(it, value);
-	// 	return *this;
-	// }
 	set& insert(T value) { // invariant assurance is postponed
-		elements.push_back(value);
-		invariant_holds = false;
+		if (elements.size() && value < elements.back()) invariant_holds = false;
+		if (!elements.size() || value != elements.back()) elements.push_back(value);
+		return *this;
+	}
+	set& remove(T value) { // presence not checked
+		removal_queue.push_back(value);
 		return *this;
 	}
 
@@ -71,8 +66,8 @@ struct set : enriched<Enrich> {
 
 	size_t size() const noexcept { return elements.size(); }
 
-	typename decltype(elements)::iterator begin() noexcept { return elements.begin(); }
-	typename decltype(elements)::iterator end() noexcept { return elements.end(); }
-	typename decltype(elements)::const_iterator begin() const noexcept { return elements.begin(); }
-	typename decltype(elements)::const_iterator end() const noexcept { return elements.end(); }
+	typename decltype(elements)::iterator begin() noexcept { ensure_guarantees(); return elements.begin(); }
+	typename decltype(elements)::iterator end() noexcept { ensure_guarantees(); return elements.end(); }
+	typename decltype(elements)::const_iterator begin() const noexcept { ensure_guarantees(); return elements.begin(); }
+	typename decltype(elements)::const_iterator end() const noexcept { ensure_guarantees(); return elements.end(); }
 };

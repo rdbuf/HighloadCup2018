@@ -11,6 +11,7 @@ using domain_t = fixwstr<100, 1>;
 using name_t = fixwstr<50, 2>;
 struct phone_t {
 	uint64_t prefix : 8, code : 16, num_len : 4, num : 36;
+	operator uint64_t() const { return *reinterpret_cast<const uint64_t*>(this); }
 };
 using country_t = fixwstr<50, 2>;
 using city_t = fixwstr<50, 2>;

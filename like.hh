@@ -14,8 +14,8 @@ struct Like {
 
 #include "set.hh"
 template<>
-set<Like>& set<Like>::ensure_guarantees() {
-	if (invariant_holds) return *this;
+void set<Like>::ensure_guarantees() const {
+	if (invariant_holds) return;
 	std::sort(elements.begin(), elements.end());
 	auto it1 = elements.begin(); const auto it2 = elements.end();
 	while (it1 != it2) {
@@ -27,5 +27,10 @@ set<Like>& set<Like>::ensure_guarantees() {
 		elements.erase(std::remove(elements.begin(), elements.end(), Like{0, 0, 0}), elements.end());
 		it1 = r;
 	}
+}
+template<>
+set<Like>& set<Like>::insert(Like value) {
+	invariant_holds = false;
+	elements.push_back(value);
 	return *this;
 }
