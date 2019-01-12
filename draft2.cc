@@ -11,14 +11,15 @@
 #include "set.hh"
 #include <tsl/array_map.h>
 #include <tsl/hopscotch_map.h>
+#include <unordered_set>
 
 #include "common-types.hh"
 
-tsl::hopscotch_map<CoolHash, name_t> fnames;
-tsl::hopscotch_map<CoolHash, name_t> snames;
-tsl::hopscotch_map<CoolHash, country_t> countries;
-tsl::hopscotch_map<CoolHash, city_t> cities;
-tsl::hopscotch_map<CoolHash, interest_t> interests;
+std::unordered_map<CoolHash, name_t> fnames;
+std::unordered_map<CoolHash, name_t> snames;
+std::unordered_map<CoolHash, country_t> countries;
+std::unordered_map<CoolHash, city_t> cities;
+std::unordered_map<CoolHash, interest_t> interests;
 
 #include "account.hh"
 #include "like.hh"
@@ -29,18 +30,18 @@ tsl::hopscotch_map<CoolHash, interest_t> interests;
 #include <tsl/array_map.h>
 #include <tsl/htrie_map.h>
 #include <unordered_map>
-struct accounts_store_t {
+struct AccountsStore {
 	constexpr static size_t N = 1600000;
 
 	std::array<std::optional<Account>, N> static_; // ids are considered mostly contiguous
 	std::array<std::mutex, N> mutexes;
-	tsl::hopscotch_map<Id, Account> dynamic;
+	std::unordered_map<Id, Account> dynamic;
 	std::mutex mutex_dynamic;
 
 	template<class F>
 	void foreach(F f) {
 		for (std::optional<Account>& acc : static_) if (acc) f(*acc);
-		for (const std::pair<Id, Account>& acc : dynamic) f(const_cast<Account&>(acc.second));
+		for (const std::pair<const Id, Account>& acc : dynamic) f(const_cast<Account&>(acc.second));
 	}
 
 	Account& operator[](Id idx) noexcept {
@@ -63,6 +64,8 @@ struct accounts_store_t {
 			fun(dynamic[idx]);
 		}
 	}
+
+	bool exists(Id id) { return id < N ? static_[id].has_value() : dynamic.find(id) != dynamic.end(); }
 } accounts_by_id;
 std::array<set<Id>, 2> ids_by_sex;
 tsl::array_map<char, set<Id>> ids_by_domain;
@@ -86,8 +89,10 @@ set<Id> ids_by_premium_now;
 std::array<set<Id>, 2> ids_by_premium_presence;
 
 #include <tsl/hopscotch_set.h>
-tsl::hopscotch_set<uint64_t> existing_phones;
-tsl::array_set<char> existing_emails; // data duplication - be careful
+// tsl::hopscotch_set<uint64_t> existing_phones;
+std::unordered_set<uint64_t> existing_phones;
+// std::unordered_set<std::string_view> existing_emails; // cannot afford - too slow
+std::unordered_set<std::string_view> existing_emails; // cannot afford - too slow
 
 int64_t current_ts;
 
@@ -187,10 +192,6 @@ namespace account_grammar {
 		field<TAO_PEGTL_STRING("ts"), nat<like_ts_tag<tag>>>
 	> {};
 
-	/* Syntactic constructions such as { ... }, [ ... ], key: value, etc. Those are not to be templated. */
-	/* Primitive types such as nat, unicode_string, etc. To be heavily templated. */
-	/* Aggregates - ??? Ah, ok: we just template tags and that's it. */
-
 	template<class tag>
 	struct account : object<
 		field<TAO_PEGTL_STRING("id"), nat<id_tag<tag>>>,
@@ -224,12 +225,12 @@ namespace account_grammar {
 
 	template<class tag>
 	struct action<nat<likee_id_tag<tag>>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		like.other = parseint::readint<10>(in.begin(), in.size());
+		like.likee = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<class tag>
 	struct action<nat<like_ts_tag<tag>>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
-		like.net_ts = parseint::readint<10>(in.begin(), in.size());
+		like.ts = parseint::readint<10>(in.begin(), in.size());
 	}};
 
 	template<class tag>
@@ -289,6 +290,10 @@ namespace account_grammar {
 	struct action<integer_sequence<phone_num_tag<tag>>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		acc.phone->num = parseint::readint<10>(in.begin(), in.size());
 		acc.phone->num_len = in.size();
+	}};
+
+	template<class tag>
+	struct action<nat<phone_tag<tag>>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 	}};
 
 	template<class tag>
@@ -367,11 +372,15 @@ namespace account_grammar {
 
 		ids_by_sex[acc_ref.sex].insert(id);
 		ids_by_domain[domain].insert(id);
-		if (acc_ref.email) ids_sorted_by_email.insert(id);
+ 		ids_sorted_by_email.insert(id);
+		existing_emails.insert(acc_ref.email);
 		ids_by_status[acc_ref.status].insert(id);
 		if (acc_ref.fname_idx) ids_by_fname[fnames[*acc_ref.fname_idx]].insert(id);
 		if (acc_ref.sname_idx) ids_by_sname[snames[*acc_ref.sname_idx]].insert(id);
-		if (acc_ref.phone) ids_by_code[acc_ref.phone->code].insert(id);
+		if (acc_ref.phone) {
+			ids_by_code[acc_ref.phone->code].insert(id);
+			existing_phones.insert(*acc_ref.phone);
+		}
 		ids_by_phone_presence[acc_ref.phone.has_value()].insert(id);
 		if (acc_ref.country_idx) ids_by_country[countries[*acc_ref.country_idx]].insert(id);
 		if (acc_ref.city_idx) ids_by_city[cities[*acc_ref.city_idx]].insert(id);
@@ -599,10 +608,13 @@ void report() {
 		"snames: {}\n"
 		"countries: {}\n"
 		"cities: {}\n"
-		"interests: {}\n",
+		"interests: {}\n"
+		"existing_phones: {}\n"
+		"existing_emails: {}\n",
 		fnames.size(), snames.size(),
 		countries.size(), cities.size(),
-		interests.size()
+		interests.size(), existing_phones.size(),
+		existing_emails.size()
 	);
 	std::cerr << fmt::format("accounts_by_id.dynamic: {}\n", accounts_by_id.dynamic.size());
 
@@ -618,20 +630,21 @@ void report() {
 void build_likers() {
 	accounts_by_id.foreach([&](Account& acc) {
 		for (Like like : acc.likes) {
-			accounts_by_id[like.other].likers.insert(acc.id);
+			accounts_by_id[like.likee].likers.insert(acc.id);
 		}
 	});
 }
 
 #include <iostream>
 int main(int argc, char** argv) {
+	existing_phones.reserve(600000);
+	existing_emails.reserve(AccountsStore::N);
 	namespace pegtl = tao::pegtl;
 	if (*argv[1] == 'j') {
 		Account acc{};
 		email_t domain{};
 		std::string buffer;
 		Like like{};
-		std::vector<Like> likes;
 		for (int i = 2; i < argc; ++i) {
 			pegtl::file_input in(argv[i]);
 			pegtl::parse<pegtl::must<account_grammar::file>, account_grammar::action>(in, acc, domain, buffer, like);
@@ -647,8 +660,8 @@ int main(int argc, char** argv) {
 		} catch (const pegtl::parse_error& e) {
 			const auto p = e.positions.front();
 			std::cerr << e.what() << std::endl
-				<< in.line_as_string( p ) << std::endl
-				<< std::string( p.byte_in_line, ' ' ) << '^' << std::endl;
+				<< in.line_as_string(p) << std::endl
+				<< std::string(p.byte_in_line, ' ') << '^' << std::endl;
 		}
 	}
 }

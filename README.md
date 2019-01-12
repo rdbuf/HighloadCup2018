@@ -15,7 +15,6 @@ Rules: https://highloadcup.ru/ru/round/4/
 - [ ] JSON printing
 - [ ] Asio setup
 - [ ] Perf setup (inside of Docker)
-- [ ] removal, locks, uniqueness
 
 ### Assumptions
 - Names only contain cyrillic symbols
@@ -29,6 +28,7 @@ Rules: https://highloadcup.ru/ru/round/4/
 - Prefix and code of any phone number begin with a non-zero digit, and all the parts fit into their respective bitfields of 8, 16 and 36 bits
 - Interests intersection of any two users does not exceed 20
 - IDNs are not involved (https://en.wikipedia.org/wiki/Internationalized_domain_name)
+- Nested structures such as like and premium are well-formed
 
 ### Thanks
 Utilities that saved me a lot of time:

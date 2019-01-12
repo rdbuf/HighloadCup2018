@@ -2,8 +2,9 @@
 
 #include "common-types.hh"
 
+/*
 struct Like {
-	uint32_t net_ts;
+	uint32_t ts;
 	Id other;
 	uint8_t num_tss;
 
@@ -34,3 +35,4 @@ set<Like>& set<Like>::insert(Like value) {
 	elements.push_back(value);
 	return *this;
 }
+*/

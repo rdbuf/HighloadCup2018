@@ -3,6 +3,14 @@
 #include <vector>
 #include <algorithm>
 #include <functional>
+
+/* Our set has the following properties:
+    1. Sortedness
+    2. Low memory overhead
+    3. Fast insertions
+   Mostly used for storing integers.
+*/
+
 template<class T, class Comparator = std::less<T>>
 struct set {
 	mutable std::vector<T> elements;
@@ -25,7 +33,9 @@ struct set {
       		assert(*it == x);
       		elements.erase(it);
     	}
+		elements.shrink_to_fit();
     	removal_queue.clear();
+    	removal_queue.shrink_to_fit();
 	}
 
 	set& insert(T value) { // invariant assurance is postponed
