@@ -5,7 +5,10 @@ add_executable(HighloadCup2018 draft2.cc)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pg -g")
 
-target_link_libraries(HighloadCup2018 PRIVATE -lfmt)
+# target_link_libraries(HighloadCup2018 PRIVATE -lfmt)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third-party/fmt)
+target_link_libraries(HighloadCup2018 PRIVATE fmt::fmt-header-only)
 
 set(PEGTL_BUILD_TESTS OFF CACHE BOOL OFF FORCE)
 set(PEGTL_BUILD_EXAMPLES OFF CACHE BOOL OFF FORCE)

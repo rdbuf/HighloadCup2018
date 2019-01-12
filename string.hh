@@ -62,3 +62,17 @@ struct fixwstr { // unsafe fixed-width string without boundary checks
 	fixwstr& ensure_zero() noexcept { *ptr = 0; return *this; }
     operator const unsigned char*() const noexcept { *ptr = 0; return reinterpret_cast<const unsigned char*>(str); }
 };
+
+// #define FMT_STRING_ALIAS 1
+// #include <fmt/format.h>
+// #undef FMT_STRING_ALIAS
+
+// internal::format_type<typename buffer_context<Char>::type, T>::value = false;
+
+// template<size_t N, size_t M>
+// struct fmt::formatter<fixwstr<N, M>> : formatter<std::string_view> {
+// 	template <class FormatContext>
+// 	auto format(fixwstr<N, M> str, FormatContext &ctx) {
+// 		return formatter<std::string_view>::format(str, ctx);
+// 	}
+// };

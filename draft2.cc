@@ -1,10 +1,12 @@
 #include <string>
 #include <iostream>
 #include <mutex>
+#include <shared_mutex>
 
 #define FMT_STRING_ALIAS 1
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#undef FMT_STRING_ALIAS
 
 /* Definition of domain specific types */
 
@@ -34,14 +36,18 @@ struct AccountsStore {
 	constexpr static size_t N = 1600000;
 
 	std::array<std::optional<Account>, N> static_; // ids are considered mostly contiguous
-	std::array<std::mutex, N> mutexes;
+	std::array<std::shared_mutex, N> mutexes;
 	std::unordered_map<Id, Account> dynamic;
-	std::mutex mutex_dynamic;
+	std::shared_mutex mutex_dynamic;
 
 	template<class F>
 	void foreach(F f) {
 		for (std::optional<Account>& acc : static_) if (acc) f(*acc);
 		for (const std::pair<const Id, Account>& acc : dynamic) f(const_cast<Account&>(acc.second));
+	}
+
+	std::shared_mutex& corresponding_mutex(Id idx) {
+		return idx < static_.size() ? mutexes[idx] : mutex_dynamic;
 	}
 
 	Account& operator[](Id idx) noexcept {
@@ -88,11 +94,8 @@ tsl::array_map<char, set<Id>> ids_by_interest;
 set<Id> ids_by_premium_now;
 std::array<set<Id>, 2> ids_by_premium_presence;
 
-#include <tsl/hopscotch_set.h>
-// tsl::hopscotch_set<uint64_t> existing_phones;
 std::unordered_set<uint64_t> existing_phones;
-// std::unordered_set<std::string_view> existing_emails; // cannot afford - too slow
-std::unordered_set<std::string_view> existing_emails; // cannot afford - too slow
+std::unordered_set<std::string_view> existing_emails;
 
 int64_t current_ts;
 
@@ -490,6 +493,16 @@ namespace request_grammar {
 		struct query_id_tag {};
 		struct limit_tag {};
 		struct order_tag {};
+
+		template<class Rule>
+		struct action : pegtl::nothing<Rule> {};
+
+		template<>
+		struct action<sex_male<sex_tag>> { template<class Input> static void apply(const Input& in, set<Id>& selected, std::bitset<Account::printable_n>& fields) {
+			fields[Account::print_sex] = true;
+			// ...
+		}};
+
 	}
 
 	namespace recommend {
@@ -635,6 +648,12 @@ void build_likers() {
 	});
 }
 
+void test_printing() {
+	accounts_by_id.foreach([&](Account& acc) {
+		acc.serialize_to(std::ostream_iterator<char>(std::cout), std::bitset<Account::printable_n>{}.set());
+	});
+}
+
 #include <iostream>
 int main(int argc, char** argv) {
 	existing_phones.reserve(600000);
@@ -652,6 +671,7 @@ int main(int argc, char** argv) {
 
 		build_likers();
 		report();
+		test_printing();
 	} else if (*argv[1] == 'r') {
 		pegtl::file_input in(argv[2]);
 		using namespace request_grammar;
