@@ -395,6 +395,8 @@ namespace account_grammar {
 	}};
 }
 
+#include <asio.hpp>
+
 namespace request_grammar {
 	namespace pegtl = tao::pegtl;
 
@@ -439,10 +441,23 @@ namespace request_grammar {
 
 	template<template<class> class Item, class Sep, class tag> struct list : pegtl::list<Item<tag>, Sep> {};
 
-	template<class> struct year : pegtl::rep<4, pegtl::digit> {};
-	namespace filter {
-		struct cmd : TAO_PEGTL_STRING("filter/?") {};
+	struct query_id_tag{};
+	struct query_id : param<TAO_PEGTL_STRING("query_id"), nat<query_id_tag>> {};
 
+	template<class> struct year : pegtl::rep<4, pegtl::digit> {};
+
+	// 1. We get a request, parse it, and go to the appropriate handler
+	// 2. Handler does two things: first, it constructs and sends an answer (asio::async_write), and after that, updates data if necessary (asio::post on another io_context)
+	template<class Rule>
+	struct action : pegtl::nothing<Rule> {};
+
+	#define ACTION_ARGS \
+		set<Id>& selected, \
+		std::bitset<Account::printable_n>& fields, \
+		asio::ip::tcp::socket& socket, \
+		asio::io_context& scheduler
+
+	namespace filter {
 		struct sex_eq_tag {};
 		struct email_domain_tag {};
 		struct email_lt_tag {};
@@ -469,19 +484,128 @@ namespace request_grammar {
 		struct premium_null_tag {};
 		struct query_id_tag {};
 		struct limit_tag {};
+
+		struct grammar : pegtl::seq<TAO_PEGTL_STRING("filter/?"), params<
+			param<TAO_PEGTL_STRING("sex_eq"), sex<sex_eq_tag>>,
+			param<TAO_PEGTL_STRING("email_domain"), email_domain<email_domain_tag>>,
+			param<TAO_PEGTL_STRING("email_lt"), email<email_lt_tag>>,
+			param<TAO_PEGTL_STRING("email_gt"), email<email_gt_tag>>,
+			param<TAO_PEGTL_STRING("status_eq"), status<status_eq_tag>>,
+			param<TAO_PEGTL_STRING("status_neq"), status<status_neq_tag>>,
+			param<TAO_PEGTL_STRING("sname_eq"), urlescaped_string<sname_eq_tag>>,
+			param<TAO_PEGTL_STRING("sname_starts"), urlescaped_string<sname_starts_tag>>,
+			param<TAO_PEGTL_STRING("sname_null"), null<sname_null_tag>>,
+			param<TAO_PEGTL_STRING("phone_code"), nat<phone_code_tag>>,
+			param<TAO_PEGTL_STRING("phone_null"), null<phone_null_tag>>,
+			param<TAO_PEGTL_STRING("country_eq"), urlescaped_string<country_eq_tag>>,
+			param<TAO_PEGTL_STRING("country_null"), null<country_null_tag>>,
+			param<TAO_PEGTL_STRING("city_eq"), urlescaped_string<city_eq_tag>>,
+			param<TAO_PEGTL_STRING("city_any"), list<urlescaped_string, pegtl::one<','>, city_any_tag>>,
+			param<TAO_PEGTL_STRING("city_null"), null<city_null_tag>>,
+			param<TAO_PEGTL_STRING("birth_lt"), nat<birth_lt_tag>>,
+			param<TAO_PEGTL_STRING("birth_gt"), nat<birth_gt_tag>>,
+			param<TAO_PEGTL_STRING("birth_year"), year<birth_year_tag>>,
+			param<TAO_PEGTL_STRING("interests_contains"), list<urlescaped_string, TAO_PEGTL_ISTRING("%2C"), interests_contains_tag>>,
+			param<TAO_PEGTL_STRING("interests_any"), list<urlescaped_string, TAO_PEGTL_ISTRING("%2C"), interests_any_tag>>,
+			param<TAO_PEGTL_STRING("likes_contains"), list<nat, TAO_PEGTL_ISTRING("%2C"), likes_contains_tag>>,
+			param<TAO_PEGTL_STRING("premium_now"), nat<premium_now_tag>>,
+			param<TAO_PEGTL_STRING("premium_null"), null<premium_null_tag>>,
+			param<TAO_PEGTL_STRING("limit"), nat<limit_tag>>,
+			query_id
+		>> {};
 	}
+	template<>
+	struct action<sex_male<filter::sex_eq_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		fields[Account::print_sex] = true;
+		// ...
+	}};
+
+	namespace status_line {
+		constexpr const char* result =
+			"HTTP/1.1 200 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: ";
+		constexpr const char* creation_successful =
+			"HTTP/1.1 201 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n"
+			"{}";
+		constexpr const char* update_successful =
+			"HTTP/1.1 202 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n"
+			"{}";
+		constexpr const char* bad_request =
+			"HTTP/1.1 400 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n";
+		constexpr const char* not_found =
+			"HTTP/1.1 404 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n";
+	}
+
+	template<>
+	struct action<filter::grammar> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		constexpr static const char* status_line =
+			"HTTP/1.1 200 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: ";
+		// asio::write(socket, buffer)
+		// ...
+	}};
+
+	struct bad_uri_exception {};
+	struct bad_request_exception {};
+
+	template<class Rule>
+	struct control : pegtl::normal<Rule> {
+		template<class Input, class... States>
+		static void raise(const Input& in, States&&...) { throw bad_request_exception{}; }
+	};
+
+	struct id_tag {};
+	struct accounts_route : TAO_PEGTL_STRING("/accounts/") {};
+	struct suggest_route : TAO_PEGTL_STRING("/suggest/?") {};
+
+	template<>
+	struct control<nat<id_tag>> : pegtl::normal<nat<id_tag>> {
+		template<class Input, class... States>
+		static void raise(const Input& in, States&&...) { throw bad_uri_exception{}; }
+	};
+	template<>
+	struct control<accounts_route> : pegtl::normal<accounts_route> {
+		template<class Input, class... States>
+		static void raise(const Input& in, States&&...) { throw bad_uri_exception{}; }
+	};
+	template<>
+	struct control<suggest_route> : pegtl::normal<suggest_route> {
+		template<class Input, class... States>
+		static void raise(const Input& in, States&&...) { throw bad_uri_exception{}; }
+	};
 
 	struct key_sex : TAO_PEGTL_STRING("sex") {};
 	struct key_status : TAO_PEGTL_STRING("status") {};
 	struct key_interests : TAO_PEGTL_STRING("interests") {};
 	struct key_country : TAO_PEGTL_STRING("country") {};
 	struct key_city : TAO_PEGTL_STRING("city") {};
-	template<class>
-	struct key : pegtl::sor<key_sex, key_status, key_interests, key_country, key_city> {};
+	template<class> struct key : pegtl::sor<key_sex, key_status, key_interests, key_country, key_city> {};
+
+	template<class> struct order_asc : pegtl::one<'1'> {};
+	template<class> struct order_desc : pegtl::seq<pegtl::one<'-'>, pegtl::one<'1'>> {};
+	template<class tag> struct order : pegtl::sor<order_asc<tag>, order_desc<tag>> {};
 
 	namespace group {
-		struct cmd : TAO_PEGTL_STRING("group/?") {};
-
 		struct sex_tag {};
 		struct status_tag {};
 		struct country_tag {};
@@ -494,121 +618,89 @@ namespace request_grammar {
 		struct limit_tag {};
 		struct order_tag {};
 
-		template<class Rule>
-		struct action : pegtl::nothing<Rule> {};
-
-		template<>
-		struct action<sex_male<sex_tag>> { template<class Input> static void apply(const Input& in, set<Id>& selected, std::bitset<Account::printable_n>& fields) {
-			fields[Account::print_sex] = true;
-			// ...
-		}};
-
+		struct grammar : pegtl::seq<TAO_PEGTL_STRING("group/?"), pegtl::must<params<
+				param<TAO_PEGTL_STRING("sex"), sex<sex_tag>>,
+				param<TAO_PEGTL_STRING("status"), status<status_tag>>,
+				param<TAO_PEGTL_STRING("country"), urlescaped_string<country_tag>>,
+				param<TAO_PEGTL_STRING("city"), urlescaped_string<city_tag>>,
+				param<TAO_PEGTL_STRING("birth"), year<birth_tag>>,
+				param<TAO_PEGTL_STRING("interests"), urlescaped_string<interests_tag>>,
+				param<TAO_PEGTL_STRING("joined"), year<joined_tag>>,
+				param<TAO_PEGTL_STRING("keys"), list<key, pegtl::one<','>, keys_tag>>,
+				param<TAO_PEGTL_STRING("query_id"), nat<query_id_tag>>,
+				param<TAO_PEGTL_STRING("limit"), nat<limit_tag>>,
+				param<TAO_PEGTL_STRING("order"), order<order_tag>>,
+				query_id
+		>>> {};
 	}
 
 	namespace recommend {
-		struct cmd : TAO_PEGTL_STRING("/recommend/?") {};
-
 		struct country_tag {};
 		struct city_tag {};
 		struct limit_tag {};
 		struct query_id_tag {};
+
+		struct grammar : pegtl::seq<TAO_PEGTL_STRING("/recommend/?"), pegtl::must<params<
+			param<TAO_PEGTL_STRING("country"), urlescaped_string<country_tag>>,
+			param<TAO_PEGTL_STRING("city"), urlescaped_string<city_tag>>,
+			param<TAO_PEGTL_STRING("limit"), nat<limit_tag>>,
+			query_id
+		>>> {};
 	}
 
 	namespace suggest {
-		struct cmd : TAO_PEGTL_STRING("/suggest/?") {};
-
 		struct country_tag {};
 		struct city_tag {};
 		struct limit_tag {};
 		struct query_id_tag {};
+
+		struct grammar : pegtl::seq<pegtl::must<suggest_route>, pegtl::must<params<
+			param<TAO_PEGTL_STRING("country"), urlescaped_string<country_tag>>,
+			param<TAO_PEGTL_STRING("city"), urlescaped_string<city_tag>>,
+			param<TAO_PEGTL_STRING("limit"), nat<limit_tag>>,
+			query_id
+		>>> {};
 	}
 
-	struct newacc_tag {};
-	struct updacc_tag {};
-	struct id_tag {};
+	namespace newacc {
+		struct newacc_tag {};
+		struct grammar : pegtl::seq<TAO_PEGTL_STRING("new/?"), pegtl::must<pegtl::seq<query_id, http_version, headers, account_grammar::account<newacc_tag>>>> {};
+	}
 
-	template<class> struct order_asc : pegtl::one<'1'> {};
-	template<class> struct order_desc : pegtl::seq<pegtl::one<'-'>, pegtl::one<'1'>> {};
-	template<class tag> struct order : pegtl::sor<order_asc<tag>, order_desc<tag>> {};
+	namespace newlikes {
+		struct likee_id_tag {};
+		struct liker_id_tag {};
+		struct like_ts_tag {};
+		struct like : account_grammar::object<
+			account_grammar::field<TAO_PEGTL_STRING("likee"), nat<likee_id_tag>>,
+			account_grammar::field<TAO_PEGTL_STRING("liker"), nat<liker_id_tag>>,
+			account_grammar::field<TAO_PEGTL_STRING("ts"), nat<like_ts_tag>>
+		> {};
+		struct newlikes : account_grammar::object<
+			account_grammar::field<TAO_PEGTL_STRING("likes"), account_grammar::array<like>>
+		> {};
 
-	struct query_id_tag{};
-	struct query_id : param<TAO_PEGTL_STRING("query_id"), nat<query_id_tag>> {};
+		struct grammar : pegtl::seq<TAO_PEGTL_STRING("likes/?"), pegtl::must<pegtl::seq<query_id, http_version, headers, newlikes>>> {};
+	}
 
-	struct likee_id_tag {};
-	struct liker_id_tag {};
-	struct like_ts_tag {};
-	struct like : account_grammar::object<
-		account_grammar::field<TAO_PEGTL_STRING("likee"), nat<likee_id_tag>>,
-		account_grammar::field<TAO_PEGTL_STRING("liker"), nat<liker_id_tag>>,
-		account_grammar::field<TAO_PEGTL_STRING("ts"), nat<like_ts_tag>>
-	> {};
-	struct newlikes : account_grammar::object<
-		account_grammar::field<TAO_PEGTL_STRING("likes"), account_grammar::array<like>>
-	> {};
+	namespace updacc {
+		struct updacc_tag {};
+		struct grammar : pegtl::seq<TAO_PEGTL_STRING("/?"), pegtl::must<pegtl::seq<query_id, http_version, headers, account_grammar::account<updacc_tag>>>> {};
+	}
 
 	struct request : pegtl::sor<
-		pegtl::seq<TAO_PEGTL_STRING("GET /accounts/"), pegtl::sor<
-			pegtl::seq<filter::cmd, params<
-				param<TAO_PEGTL_STRING("sex_eq"), sex<filter::sex_eq_tag>>,
-				param<TAO_PEGTL_STRING("email_domain"), email_domain<filter::email_domain_tag>>,
-				param<TAO_PEGTL_STRING("email_lt"), email<filter::email_lt_tag>>,
-				param<TAO_PEGTL_STRING("email_gt"), email<filter::email_gt_tag>>,
-				param<TAO_PEGTL_STRING("status_eq"), status<filter::status_eq_tag>>,
-				param<TAO_PEGTL_STRING("status_neq"), status<filter::status_neq_tag>>,
-				param<TAO_PEGTL_STRING("sname_eq"), urlescaped_string<filter::sname_eq_tag>>,
-				param<TAO_PEGTL_STRING("sname_starts"), urlescaped_string<filter::sname_starts_tag>>,
-				param<TAO_PEGTL_STRING("sname_null"), null<filter::sname_null_tag>>,
-				param<TAO_PEGTL_STRING("phone_code"), nat<filter::phone_code_tag>>,
-				param<TAO_PEGTL_STRING("phone_null"), null<filter::phone_null_tag>>,
-				param<TAO_PEGTL_STRING("country_eq"), urlescaped_string<filter::country_eq_tag>>,
-				param<TAO_PEGTL_STRING("country_null"), null<filter::country_null_tag>>,
-				param<TAO_PEGTL_STRING("city_eq"), urlescaped_string<filter::city_eq_tag>>,
-				param<TAO_PEGTL_STRING("city_any"), list<urlescaped_string, pegtl::one<','>, filter::city_any_tag>>,
-				param<TAO_PEGTL_STRING("city_null"), null<filter::city_null_tag>>,
-				param<TAO_PEGTL_STRING("birth_lt"), nat<filter::birth_lt_tag>>,
-				param<TAO_PEGTL_STRING("birth_gt"), nat<filter::birth_gt_tag>>,
-				param<TAO_PEGTL_STRING("birth_year"), year<filter::birth_year_tag>>,
-				param<TAO_PEGTL_STRING("interests_contains"), list<urlescaped_string, TAO_PEGTL_ISTRING("%2C"), filter::interests_contains_tag>>,
-				param<TAO_PEGTL_STRING("interests_any"), list<urlescaped_string, TAO_PEGTL_ISTRING("%2C"), filter::interests_any_tag>>,
-				param<TAO_PEGTL_STRING("likes_contains"), list<nat, TAO_PEGTL_ISTRING("%2C"), filter::likes_contains_tag>>,
-				param<TAO_PEGTL_STRING("premium_now"), nat<filter::premium_now_tag>>,
-				param<TAO_PEGTL_STRING("premium_null"), null<filter::premium_null_tag>>,
-				param<TAO_PEGTL_STRING("limit"), nat<filter::limit_tag>>,
-				query_id
-			>>,
-			pegtl::seq<group::cmd, params<
-				param<TAO_PEGTL_STRING("sex"), sex<group::sex_tag>>,
-				param<TAO_PEGTL_STRING("status"), status<group::status_tag>>,
-				param<TAO_PEGTL_STRING("country"), urlescaped_string<group::country_tag>>,
-				param<TAO_PEGTL_STRING("city"), urlescaped_string<group::city_tag>>,
-				param<TAO_PEGTL_STRING("birth"), year<group::birth_tag>>,
-				param<TAO_PEGTL_STRING("interests"), urlescaped_string<group::interests_tag>>,
-				param<TAO_PEGTL_STRING("joined"), year<group::joined_tag>>,
-				param<TAO_PEGTL_STRING("keys"), list<key, pegtl::one<','>, group::keys_tag>>,
-				param<TAO_PEGTL_STRING("query_id"), nat<group::query_id_tag>>,
-				param<TAO_PEGTL_STRING("limit"), nat<group::limit_tag>>,
-				param<TAO_PEGTL_STRING("order"), order<group::order_tag>>,
-				query_id
-			>>,
-			pegtl::seq<nat<id_tag>, pegtl::sor<
-				pegtl::seq<recommend::cmd, params<
-					param<TAO_PEGTL_STRING("country"), urlescaped_string<recommend::country_tag>>,
-					param<TAO_PEGTL_STRING("city"), urlescaped_string<recommend::city_tag>>,
- 					param<TAO_PEGTL_STRING("limit"), nat<recommend::limit_tag>>,
- 					query_id
-				>>,
-				pegtl::seq<suggest::cmd, params<
-					param<TAO_PEGTL_STRING("country"), urlescaped_string<suggest::country_tag>>,
-					param<TAO_PEGTL_STRING("city"), urlescaped_string<suggest::city_tag>>,
-					param<TAO_PEGTL_STRING("limit"), nat<suggest::limit_tag>>,
- 					query_id
-				>>
+		pegtl::seq<TAO_PEGTL_STRING("GET "), pegtl::must<accounts_route>, pegtl::sor<
+			filter::grammar,
+			group::grammar,
+			pegtl::seq<pegtl::must<nat<id_tag>>, pegtl::sor<
+				recommend::grammar,
+				suggest::grammar
 			>>
 		>, http_version, headers>,
-		pegtl::seq<TAO_PEGTL_STRING("POST /accounts/"), pegtl::sor<
-			pegtl::seq<TAO_PEGTL_STRING("new/?"), query_id, http_version, headers, account_grammar::account<newacc_tag>>,
-			pegtl::seq<nat<id_tag>, TAO_PEGTL_STRING("/?"), query_id, http_version, headers, account_grammar::account<updacc_tag>>,
-			pegtl::seq<TAO_PEGTL_STRING("likes/?"), query_id, http_version, headers, newlikes>
+		pegtl::seq<TAO_PEGTL_STRING("POST "), pegtl::must<accounts_route>, pegtl::sor<
+			newacc::grammar,
+			newlikes::grammar,
+			pegtl::seq<pegtl::must<nat<id_tag>>, updacc::grammar>
 		>>
 	> {};
 }
@@ -676,12 +768,16 @@ int main(int argc, char** argv) {
 		pegtl::file_input in(argv[2]);
 		using namespace request_grammar;
 		try {
-			pegtl::parse<pegtl::must<request_grammar::request>>(in);
+			pegtl::parse<pegtl::must<request_grammar::request>, pegtl::nothing, request_grammar::control>(in);
 		} catch (const pegtl::parse_error& e) {
 			const auto p = e.positions.front();
 			std::cerr << e.what() << std::endl
 				<< in.line_as_string(p) << std::endl
 				<< std::string(p.byte_in_line, ' ') << '^' << std::endl;
+		} catch (const request_grammar::bad_uri_exception&) {
+			std::cerr << "bad uri\n";
+		} catch (const request_grammar::bad_request_exception&) {
+			std::cerr << "bad request\n";
 		}
 	}
 }
