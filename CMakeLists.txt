@@ -3,9 +3,13 @@ cmake_minimum_required(VERSION 3.8.0 FATAL_ERROR)
 project(HighloadCup2018 VERSION 0.1.0 LANGUAGES CXX)
 add_executable(HighloadCup2018 draft2.cc)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pg -g")
+set_target_properties(HighloadCup2018 PROPERTIES
+	CXX_STANDARD 17
+	CXX_STANDARD_REQUIRED ON
+	CXX_EXTENSIONS OFF
+)
 
-# target_link_libraries(HighloadCup2018 PRIVATE -lfmt)
+target_compile_options(HighloadCup2018 PUBLIC -O3 -pg -g)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third-party/fmt)
 target_link_libraries(HighloadCup2018 PRIVATE fmt::fmt-header-only)
@@ -30,10 +34,5 @@ target_link_libraries(HighloadCup2018 PRIVATE tsl::hat_trie)
 
 target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/utf8_encode)
 
-set_target_properties(${exename} PROPERTIES
-	CXX_STANDARD 17
-	CXX_STANDARD_REQUIRED ON
-	CXX_EXTENSIONS OFF
-)
-
-target_compile_options(HighloadCup2018 PUBLIC -O3)
+target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/asio/asio/include)
+target_link_libraries(HighloadCup2018 PRIVATE -lpthread)

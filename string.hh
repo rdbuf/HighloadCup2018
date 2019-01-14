@@ -13,29 +13,34 @@ struct fixwstr { // unsafe fixed-width string without boundary checks
 
 	fixwstr() = default;
 	fixwstr(const char* a, size_t sz) noexcept {
-		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)a, sz);
-		std::memcpy(ptr, a, sz);
-		ptr += sz;
+		std::memcpy(str, a, sz);
+		ptr = str + sz;
+	}
+	fixwstr(const fixwstr& other) noexcept {
+		std::memcpy(str, other.str, other.size());
+		ptr = str + other.size();
 	}
 	fixwstr(fixwstr&& other) noexcept {
-		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)other.str, other.size());
-		std::memcpy(ptr, other.str, other.size());
-		ptr += other.size();
+		std::memcpy(str, other.str, other.size());
+		ptr = str + other.size();
 		other.clear();
 	}
+	fixwstr& operator=(const fixwstr& other) noexcept {
+		std::memcpy(str, other.str, other.size());
+		ptr = str + other.size();
+		return *this;
+	}
 	fixwstr& operator=(fixwstr&& other) noexcept {
-		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)other.str, other.size());
-		std::memcpy(ptr, other.str, other.size());
-		ptr += other.size();
+		std::memcpy(str, other.str, other.size());
+		ptr = str + other.size();
 		other.clear();
 		return *this;
 	}
 	~fixwstr() { clear(); }
 
 	void construct_from(const char* a, size_t sz) noexcept {
-		// std::cerr << fmt::format("ptr = {}, a = {}, sz = {}\n", (void*)ptr, (void*)a, sz);
 		std::memcpy(str, a, sz);
-		str = ptr + sz;
+		ptr = str + sz;
 	}
 	void clear() { ptr = str; }
 

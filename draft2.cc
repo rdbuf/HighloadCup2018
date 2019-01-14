@@ -62,11 +62,11 @@ struct AccountsStore {
 	template<class F>
 	void threadsafe_apply_to(Id idx, F fun) {
 		if (idx < static_.size()) {
-			std::lock_guard lock(mutexes[idx]);
+			std::scoped_lock lock(mutexes[idx]);
 			if (!static_[idx]) static_[idx] = Account{};
 			fun(*static_[idx]);
 		} else {
-			std::lock_guard lock(mutex_dynamic);
+			std::scoped_lock lock(mutex_dynamic);
 			fun(dynamic[idx]);
 		}
 	}
@@ -373,6 +373,7 @@ namespace account_grammar {
 		const Account& acc_ref = accounts_by_id[id] = std::move(acc);
 		acc = Account{};
 
+
 		ids_by_sex[acc_ref.sex].insert(id);
 		ids_by_domain[domain].insert(id);
  		ids_sorted_by_email.insert(id);
@@ -390,6 +391,8 @@ namespace account_grammar {
 		for (const CoolHash hash : acc_ref.interest_idcs) ids_by_interest[interests[hash]].insert(id);
 		if (*acc_ref.premium_start < current_ts && *acc_ref.premium_end > current_ts) ids_by_premium_now.insert(id);
 		ids_by_premium_presence[acc_ref.premium_start.has_value()].insert(id);
+
+		// for (auto i : interests) std::cout << "interest: " << i.second << "\n";
 
 		domain.clear();
 	}};
@@ -446,16 +449,52 @@ namespace request_grammar {
 
 	template<class> struct year : pegtl::rep<4, pegtl::digit> {};
 
+
+	namespace http_prefix {
+		constexpr const char ok[] =
+			"HTTP/1.1 200 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: ";
+		constexpr const char creation_successful[] =
+			"HTTP/1.1 201 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n"
+			"{}";
+		constexpr const char update_successful[] =
+			"HTTP/1.1 202 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n"
+			"{}";
+		constexpr const char bad_request[] =
+			"HTTP/1.1 400 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n";
+		constexpr const char not_found[] =
+			"HTTP/1.1 404 \r\n"
+			"Content-Type: application/json\r\n"
+			"Connection: keep-alive\r\n"
+			"Content-Length: 0\r\n"
+			"\r\n";
+	}
+
 	// 1. We get a request, parse it, and go to the appropriate handler
 	// 2. Handler does two things: first, it constructs and sends an answer (asio::async_write), and after that, updates data if necessary (asio::post on another io_context)
 	template<class Rule>
 	struct action : pegtl::nothing<Rule> {};
 
+	// must be thread_local
 	#define ACTION_ARGS \
-		set<Id>& selected, \
-		std::bitset<Account::printable_n>& fields, \
-		asio::ip::tcp::socket& socket, \
-		asio::io_context& scheduler
+		std::vector<set<Id>*>& sets, \
+		std::bitset<Account::printable_n>& fields
+		// asio::ip::tcp::socket& socket, \
+		// asio::io_context& scheduler
 
 	namespace filter {
 		struct sex_eq_tag {};
@@ -517,52 +556,60 @@ namespace request_grammar {
 	template<>
 	struct action<sex_male<filter::sex_eq_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
 		fields[Account::print_sex] = true;
-		// ...
+		sets.push_back(&ids_by_sex[male]);
 	}};
 
-	namespace status_line {
-		constexpr const char* result =
-			"HTTP/1.1 200 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: ";
-		constexpr const char* creation_successful =
-			"HTTP/1.1 201 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: 0\r\n"
-			"\r\n"
-			"{}";
-		constexpr const char* update_successful =
-			"HTTP/1.1 202 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: 0\r\n"
-			"\r\n"
-			"{}";
-		constexpr const char* bad_request =
-			"HTTP/1.1 400 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: 0\r\n"
-			"\r\n";
-		constexpr const char* not_found =
-			"HTTP/1.1 404 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: 0\r\n"
-			"\r\n";
-	}
+
+	/* That's crazy but should works */
+	// template<class... M>
+	// auto acquire_vec(M... mutexes, const std::vector<set<Id>*>& vec, size_t i = 0);
+
+	// template<class... M, class N>
+	// auto acquire_vec_helper(N& mutex, M... mutexes, const std::vector<set<Id>*>& vec, size_t i = 0) {
+	// 	if (vec.size() == i) return std::scoped_lock<N, M...>(mutex, mutexes...);
+	// 	return acquire_vec(mutexes..., vec, i);
+	// }
+
+	// template<class... M>
+	// auto acquire_vec(M... mutexes, const std::vector<set<Id>*>& vec, size_t i) {
+	// 	return acquire_vec_helper(vec[i]->internal_mutex, mutexes..., vec, i + 1);
+	// }
 
 	template<>
 	struct action<filter::grammar> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
-		constexpr static const char* status_line =
-			"HTTP/1.1 200 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: ";
-		// asio::write(socket, buffer)
-		// ...
+		// auto lock = acquire_vec(sets);
+		// std::vector<std::reference_wrapper<std::mutex>> mutexes; mutexes.reserve(sets.size());
+		// for (set<Id>* s : sets) mutexes.push_back(std::ref(s->internal_mutex));
+		// std::vector<std::mutex*> mutexes; mutexes.reserve(sets.size());
+		// for (set<Id>* s : sets) mutexes.push_back(&s->internal_mutex);
+		// boost::lock(mutexes.begin(), mutexes.end());
+
+		/* Not quite accurate but pretty enough */
+		std::sort(sets.begin(), sets.end(), [](auto x, auto y) {
+			return x->size() < y->size();
+		});
+		set<Id> selected; selected.universe = true;
+		for (set<Id>* s : sets) { selected.intersect(*s); }
+		std::string buffer(R"({"accounts":[)");
+		int limit_arg = 5;
+		for (auto i = 0; i < limit_arg && i < selected.size(); ++i) {
+			accounts_by_id[selected.elements[selected.size()-i-1]].serialize_to(std::back_inserter(buffer), fields);
+			buffer.push_back(',');
+		}
+		if (selected.size()) buffer.pop_back();
+		buffer += "]}";
+		std::vector<asio::const_buffer> buffers({
+			asio::buffer(http_prefix::ok),
+			asio::buffer(std::to_string(buffer.length())),
+			asio::buffer("\r\n", 2),
+			asio::buffer(buffer)
+		});
+
+		std::cout << http_prefix::ok << std::to_string(buffer.length()) << buffer;
+
+		// for (auto& x : buffers) std::cout << x;
+
+		// asio::write(socket, buffers);
 	}};
 
 	struct bad_uri_exception {};
@@ -747,7 +794,9 @@ void test_printing() {
 }
 
 #include <iostream>
+#include <string>
 int main(int argc, char** argv) {
+	using namespace std::literals::string_literals;
 	existing_phones.reserve(600000);
 	existing_emails.reserve(AccountsStore::N);
 	namespace pegtl = tao::pegtl;
@@ -761,14 +810,26 @@ int main(int argc, char** argv) {
 			pegtl::parse<pegtl::must<account_grammar::file>, account_grammar::action>(in, acc, domain, buffer, like);
 		}
 
+		std::cerr << fmt::format("parsed successfully\n");
+
 		build_likers();
 		report();
-		test_printing();
+		// test_printing();
+		static thread_local std::vector<set<Id>*> sets;
+		static thread_local std::bitset<Account::printable_n> fields;
+		pegtl::parse<pegtl::must<request_grammar::request>, request_grammar::action, request_grammar::control>(pegtl::string_input(
+			"GET /accounts/filter/?limit=4&sex_eq=m&query_id=2172 HTTP/1.1\r\n"
+			"Host: accounts.com\r\n"
+			"User-Agent: Technolab/1.0 (Docker; CentOS) Highload/1.0\r\n"
+			"Accept: */*\r\n"
+			"Connection: keep-alive\r\n\r\n"s, ""), sets, fields);
 	} else if (*argv[1] == 'r') {
 		pegtl::file_input in(argv[2]);
 		using namespace request_grammar;
 		try {
-			pegtl::parse<pegtl::must<request_grammar::request>, pegtl::nothing, request_grammar::control>(in);
+			static thread_local std::vector<set<Id>*> sets;
+			static thread_local std::bitset<Account::printable_n> fields;
+			pegtl::parse<pegtl::must<request_grammar::request>, request_grammar::action, request_grammar::control>(in, sets, fields);
 		} catch (const pegtl::parse_error& e) {
 			const auto p = e.positions.front();
 			std::cerr << e.what() << std::endl
