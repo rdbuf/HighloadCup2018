@@ -50,10 +50,22 @@ struct Account { // size: 352
 	template<class OutputIt>
 	void serialize_to(OutputIt dest, std::bitset<printable_n> fields) { // no checks performed
 		fmt::format_to(dest, fmt(R"({{"email":"{:s}",)"), email);
-		if (fields[print_fname]) fmt::format_to(dest, fmt(R"("fname":"{:s}",)"), fnames[*fname_idx]);
-		if (fields[print_sname]) fmt::format_to(dest, fmt(R"("sname":"{:s}",)"), snames[*sname_idx]);
-		if (fields[print_country]) fmt::format_to(dest, fmt(R"("country":"{:s}",)"), countries[*country_idx]);
-		if (fields[print_city]) fmt::format_to(dest, fmt(R"("city":"{:s}",)"), cities[*city_idx]);
+		if (fields[print_fname]) {
+			std::shared_lock lk(fnames_mutex);
+			fmt::format_to(dest, fmt(R"("fname":"{:s}",)"), fnames[*fname_idx]);
+		}
+		if (fields[print_sname]) {
+			std::shared_lock lk(snames_mutex);
+			fmt::format_to(dest, fmt(R"("sname":"{:s}",)"), snames[*sname_idx]);
+		}
+		if (fields[print_country]) {
+			std::shared_lock lk(countries_mutex);
+			fmt::format_to(dest, fmt(R"("country":"{:s}",)"), countries[*country_idx]);
+		}
+		if (fields[print_city]) {
+			std::shared_lock lk(cities_mutex);
+			fmt::format_to(dest, fmt(R"("city":"{:s}",)"), cities[*city_idx]);
+		}
 		if (fields[print_phone]) fmt::format_to(dest, fmt(R"("phone":"{0:d}({1:d}){3:{2}d}",)"), phone->prefix, phone->code, phone->num_len, phone->num);
 		if (fields[print_premium]) fmt::format_to(dest, fmt(R"("premium":{{"finish":{:d},"start":{:d}}},)"), *premium_end, *premium_start);
 		if (fields[print_birth]) fmt::format_to(dest, fmt(R"("birth":{:d},)"), birth);
