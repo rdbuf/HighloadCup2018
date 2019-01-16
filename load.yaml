@@ -1,0 +1,14 @@
+phantom:
+  address: 127.0.0.1:8091
+  ammofile: ./test_accounts_291218/ammo/phase_1_get.ammo
+  load_profile:
+    load_type: rps
+    schedule: const(1,90s)
+  connection_test: false
+  chosen_cases: "GET:/accounts/filter/"
+  # uris:
+    # - /accounts/filter
+console:
+  enabled: true
+telegraf:
+  enabled: false
