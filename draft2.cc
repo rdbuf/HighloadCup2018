@@ -593,7 +593,9 @@ namespace account_grammar {
 	}};
 }
 
+#define ASIO_STANDALONE
 #include <asio.hpp>
+#undef ASIO_STANDALONE
 
 namespace request_grammar {
 	namespace pegtl = tao::pegtl;

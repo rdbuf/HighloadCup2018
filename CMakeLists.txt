@@ -35,5 +35,4 @@ target_link_libraries(HighloadCup2018 PRIVATE tsl::hat_trie)
 target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/utf8_encode)
 
 target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/asio/asio/include)
-target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/config/include)
 target_link_libraries(HighloadCup2018 PRIVATE -lpthread)
