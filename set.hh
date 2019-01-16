@@ -39,14 +39,16 @@ struct set {
 		removal_queue(other.removal_queue),
 		cmp(other.cmp),
 		universe(other.universe),
-		invariant_holds(other.invariant_holds) {}
+		invariant_holds(other.invariant_holds),
+		internal_mutex() {}
 	set(const set<T>& other) : set(other, std::scoped_lock<std::mutex>(other.internal_mutex)) {}
 	set(set<T>&& other, const std::scoped_lock<std::mutex>&) :
 		elements(std::move(other.elements)),
 		removal_queue(std::move(other.removal_queue)),
 		cmp(std::move(other.cmp)),
 		universe(other.universe),
-		invariant_holds(other.invariant_holds) {}
+		invariant_holds(other.invariant_holds),
+		internal_mutex() {}
 	set(set<T>&& other) : set(std::move(other), std::scoped_lock<std::mutex>(other.internal_mutex)) {}
 
 	set& operator=(const set<T>& rhs) {
@@ -114,7 +116,7 @@ struct set {
 
 	set& insert(T value) { // invariant assurance is postponed
 		std::scoped_lock lk(internal_mutex);
-		if (elements.size() && cmp(value, elements.back())) invariant_holds = false;
+		invariant_holds = false;
 		if (!elements.size() || value != elements.back()) elements.push_back(value);
 		return *this;
 	}

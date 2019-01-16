@@ -2,6 +2,7 @@
 #include <iostream>
 #include <mutex>
 #include <shared_mutex>
+#include <array>
 
 #define FMT_STRING_ALIAS 1
 #include <fmt/format.h>
@@ -37,6 +38,8 @@ std::shared_mutex interests_mutex;
 #include <tsl/array_map.h>
 #include <tsl/htrie_map.h>
 #include <unordered_map>
+#include <utility>
+#include <type_traits>
 struct AccountsStore {
 	constexpr static size_t N = 1600000;
 
@@ -44,40 +47,152 @@ struct AccountsStore {
 	std::array<std::shared_mutex, N> mutexes;
 	std::unordered_map<Id, Account> dynamic;
 	std::shared_mutex mutex_dynamic;
+	std::unordered_map<Id, std::shared_mutex> mutexes_dynamic;
 
 	template<class F>
 	void foreach(F f) {
 		for (std::optional<Account>& acc : static_) if (acc) f(*acc);
+		std::unique_lock lk(mutex_dynamic);
 		for (const std::pair<const Id, Account>& acc : dynamic) f(const_cast<Account&>(acc.second));
 	}
 
 	std::shared_mutex& corresponding_mutex(Id idx) {
-		return idx < static_.size() ? mutexes[idx] : mutex_dynamic;
-	}
-
-	Account& operator[](Id idx) noexcept {
 		if (idx < static_.size()) {
-			if (!static_[idx]) static_[idx] = Account{};
-			return *static_[idx];
+			return mutexes[idx];
 		} else {
-			std::unique_lock lk(mutex_dynamic);
-			return dynamic[idx];
+			std::shared_lock lk(mutex_dynamic);
+			return mutexes_dynamic[idx];
 		}
 	}
 
-	template<class F>
-	void threadsafe_apply_to(Id idx, F fun) {
-		if (idx < static_.size()) {
-			std::scoped_lock lock(mutexes[idx]);
-			if (!static_[idx]) static_[idx] = Account{};
-			fun(*static_[idx]);
+	// was tailored for move-only types
+	// template<class T, template<class...> class C, class... Ts, size_t... I>
+	// auto cons_helper(T&& head, C<Ts...>&& tail, std::index_sequence<I...>) {
+	// 	return C<T, Ts...>(std::move(head), std::move(std::get<I>(tail))...);
+	// }
+
+	// template<class T, template<class...> class C, class... Ts>
+	// auto cons(T&& head, C<Ts...>&& tail) -> C<T, Ts...> {
+	// 	return cons_helper(std::move(head), std::move(tail), std::index_sequence_for<Ts...>());
+	// }
+	template<class T, size_t N, size_t... I>
+	auto cons_helper(std::array<T, 1>&& head, std::array<T, N>&& tail, std::index_sequence<I...>) -> std::array<T, N+1> {
+		return std::array<T, N+1>{std::move(head[0]), std::move(std::get<I>(tail))...};
+	}
+
+	template<class T, size_t N>
+	auto cons(std::array<T, 1>&& head, std::array<T, N>&& tail) -> std::array<T, N+1> {
+		return cons_helper(std::move(head), std::move(tail), std::make_index_sequence<N>());
+	}
+
+
+
+	// template<size_t N, class T> struct TupleN_helper { using type = decltype(cons(std::declval<T>(), std::declval<TupleN_helper<N-1, T>>())); };
+	// template<class T> struct TupleN_helper<1, T> { using type = std::tuple<T>; };
+	// template<size_t N, class T> using TupleN = typename TupleN_helper<N, T>::type;
+	// template<size_t N, class T>
+	// using TupleN = std::array<T, N>;
+
+	template<template<class> class LockT, class T>
+	using const_qualified = std::conditional_t<std::is_same_v<LockT<std::shared_mutex>, std::shared_lock<std::shared_mutex>>, const T,
+		std::conditional_t<std::is_same_v<LockT<std::shared_mutex>, std::unique_lock<std::shared_mutex>>, T, void>>;
+
+	// template<class... OptionalSharedLock>
+	// void process_optional_locks_helper(OptionalSharedLock lk, OptionalSharedLock... lks) {
+	// 	if (lk) return cons(lk, process_optional_locks_helper(lks...));
+	// 	else return process_optional_locks_helper(lks...);
+	// }
+	// template
+
+	template<template<class> class LockT, bool ShouldCreate = false, class... IdT>
+	std::array<std::tuple<std::optional<const_qualified<LockT, std::reference_wrapper<Account>>>, LockT<std::shared_mutex>, std::optional<std::shared_lock<std::shared_mutex>>>, sizeof...(IdT) + 1>
+	get_and_lock_inner(Id id, IdT... ids) {
+		auto result = cons(get_and_lock_inner<LockT, ShouldCreate>(id), get_and_lock_inner<LockT, ShouldCreate>(ids...));
+		return result;
+	}
+
+	template<template<class> class LockT, bool ShouldCreate = false>
+	std::array<std::tuple<std::optional<const_qualified<LockT, std::reference_wrapper<Account>>>, LockT<std::shared_mutex>, std::optional<std::shared_lock<std::shared_mutex>>>, 1>
+	get_and_lock_inner(Id id) { // wow, that's even type-safe
+		using acc_ref_t = std::optional<const_qualified<LockT, std::reference_wrapper<Account>>>;
+		using ret_triplet = std::tuple<acc_ref_t, LockT<std::shared_mutex>, std::optional<std::shared_lock<std::shared_mutex>>>;
+		using ret_val_t = std::array<ret_triplet, 1>;
+		if (id < N) {
+			std::shared_lock lk(mutexes[id]);
+			if constexpr (!ShouldCreate) {
+				return ret_val_t{ret_triplet{(static_[id].has_value() ? acc_ref_t(*static_[id]) : acc_ref_t(std::nullopt)), LockT(mutexes[id], std::defer_lock), std::nullopt}};
+			} else {
+				return ret_val_t{ret_triplet{(!static_[id].has_value() ? acc_ref_t(*(static_[id] = Account{})) : acc_ref_t(std::nullopt)), LockT(mutexes[id], std::defer_lock), std::nullopt}};
+			}
 		} else {
-			std::scoped_lock lock(mutex_dynamic);
-			fun(dynamic[idx]);
+			std::shared_lock lk(mutex_dynamic);
+			auto it = dynamic.find(id);
+			if constexpr (ShouldCreate) {
+				return ret_val_t{ret_triplet{(it != dynamic.end() ? acc_ref_t(it->second) : acc_ref_t(std::nullopt)), LockT(mutexes_dynamic[id], std::defer_lock), std::move(lk)}};
+			} else {
+				return ret_val_t{ret_triplet{(it == dynamic.end() ? acc_ref_t(dynamic[id]) : acc_ref_t(std::nullopt)), LockT(mutexes_dynamic[id], std::defer_lock), std::move(lk)}};
+			}
 		}
 	}
 
-	bool exists(Id id) { return id < N ? static_[id].has_value() : dynamic.find(id) != dynamic.end(); }
+	template<size_t... I>
+	void get_and_lock_lock_helper(auto& result, std::index_sequence<I...>) {
+		static_assert(sizeof...(I) > 0, "must specify at least one id");
+		if constexpr (sizeof...(I) > 1) {
+			std::lock(std::get<1>(std::get<I>(result))...);
+		} else {
+			std::get<1>(result[0]).lock();
+		}
+	}
+
+	template<template<class> class LockT, bool ShouldCreate = false, class... IdT>
+	std::array<std::tuple<std::optional<const_qualified<LockT, std::reference_wrapper<Account>>>, LockT<std::shared_mutex>, std::optional<std::shared_lock<std::shared_mutex>>>, sizeof...(IdT)>
+	get_and_lock(IdT... ids) {
+		auto result = get_and_lock_inner<LockT, ShouldCreate>(ids...);
+		get_and_lock_lock_helper(result, std::make_index_sequence<sizeof...(ids)>());
+		return result;
+	}
+
+
+	bool exists(Id idx) {
+		if (idx < N) {
+			std::shared_lock lk(mutexes[idx]);
+			return static_[idx].has_value();
+		} else {
+			std::shared_lock lk(mutex_dynamic);
+			return dynamic.find(idx) != dynamic.end();
+		}
+	}
+
+	// 1. Removal never happens, only updates
+	// 2. Map rehash needs an exclusive lock
+	// Account& operator[](Id idx) noexcept {
+	// 	if (idx < static_.size()) {
+	// 		std::shared_lock lk(mutexes[idx]);
+	// 		if (!static_[idx]) {
+	// 			lk.unlock();
+	// 			std::unique_lock lk_uniq(mutexes[idx]);
+	// 			if (!static_[idx]) {
+	// 				static_[idx] = Account{};
+	// 			}
+	// 			return *static_[idx];
+	// 		} else {
+	// 			return *static_[idx];
+	// 		}
+	// 	} else {
+	// 		std::shared_lock lk(mutex_dynamic);
+	// 		if (dynamic.find(idx) == dynamic.end()) {
+	// 			lk.unlock();
+	// 			std::unique_lock lk_uniq(mutex_dynamic);
+	// 			if (dynamic.find(idx) == dynamic.end()) {
+	// 				dynamic[idx];
+	// 			}
+	// 			return dynamic[idx];
+	// 		} else {
+	// 			return dynamic[idx];
+	// 		}
+	// 	}
+	// }
 } accounts_by_id;
 // all this global shit is to be protected by shared_mutexes
 std::array<set<Id>, 2> ids_by_sex;
@@ -85,9 +200,11 @@ std::shared_mutex ids_by_sex_mutex;
 tsl::array_map<char, set<Id>> ids_by_domain;
 std::shared_mutex ids_by_domain_mutex;
 struct cmp_id_by_email { bool operator()(Id a, Id b) {
-	std::shared_lock lk1(accounts_by_id.corresponding_mutex(a), std::defer_lock), lk2(accounts_by_id.corresponding_mutex(b), std::defer_lock);
-	std::lock(lk1, lk2);
-	return *accounts_by_id[a].email < *accounts_by_id[b].email;
+	// std::shared_lock lk1(accounts_by_id.corresponding_mutex(a), std::defer_lock), lk2(accounts_by_id.corresponding_mutex(b), std::defer_lock);
+	// std::lock(lk1, lk2);
+	// return *accounts_by_id[a].email < *accounts_by_id[b].email;
+	auto [acc1, acc2] = accounts_by_id.get_and_lock<std::shared_lock>(a, b);
+	return std::get<0>(acc1)->get().email < std::get<0>(acc2)->get().email;
 }};
 set<Id, cmp_id_by_email> ids_sorted_by_email;
 std::shared_mutex ids_sorted_by_email_mutex;
@@ -113,9 +230,11 @@ std::shared_mutex ids_by_city_mutex;
 std::array<set<Id>, 2> ids_by_city_presence;
 std::shared_mutex ids_by_city_presence_mutex;
 struct cmp_id_by_birth { bool operator()(Id a, Id b) { // all optionals are assumed to be present
-	std::shared_lock lk1(accounts_by_id.corresponding_mutex(a), std::defer_lock), lk2(accounts_by_id.corresponding_mutex(b), std::defer_lock);
-	std::lock(lk1, lk2);
-	return accounts_by_id[a].birth < accounts_by_id[b].birth;
+	// std::shared_lock lk1(accounts_by_id.corresponding_mutex(a), std::defer_lock), lk2(accounts_by_id.corresponding_mutex(b), std::defer_lock);
+	// std::lock(lk1, lk2);
+	// return accounts_by_id[a].birth < accounts_by_id[b].birth;
+	auto [acc1, acc2] = accounts_by_id.get_and_lock<std::shared_lock>(a, b);
+	return std::get<0>(acc1)->get().birth < std::get<0>(acc2)->get().birth;
 }};
 set<Id, cmp_id_by_birth> ids_sorted_by_birth;
 std::shared_mutex ids_sorted_by_birth_mutex;
@@ -439,7 +558,9 @@ namespace account_grammar {
 	struct action<account<intialboot_tag>> { template<class Input> static void apply(const Input& in, Account& acc, email_t& domain, std::string& buffer, Like& like) {
 		Id id = acc.id;
 
-		const Account& acc_ref = accounts_by_id[id] = std::move(acc);
+		auto [acc_] = accounts_by_id.get_and_lock<std::unique_lock, true>(id);
+		auto& acc_ref = std::get<0>(acc_)->get();
+		acc_ref = std::move(acc);
 		acc = Account{};
 
 		ids_by_sex[acc_ref.sex].insert(id);
@@ -521,7 +642,8 @@ namespace request_grammar {
 	template<template<class> class Item, class Sep, class tag> struct list : pegtl::list<Item<tag>, Sep> {};
 
 	struct query_id_tag{};
-	struct query_id : param<TAO_PEGTL_STRING("query_id"), nat<query_id_tag>> {};
+	template<class tag> struct int_ : pegtl::plus<pegtl::digit> {};
+	struct query_id : param<TAO_PEGTL_STRING("query_id"), int_<query_id_tag>> {};
 
 	template<class> struct year : pegtl::rep<4, pegtl::digit> {};
 
@@ -571,7 +693,8 @@ namespace request_grammar {
 		size_t& limit, \
 		asio::ip::tcp::socket& socket, \
 		asio::streambuf& buf, \
-		bool& keepalive
+		bool& keepalive, \
+		Id id
 		// std::vector<set<Id>*>& intersect, \
 		// std::vector<set<Id>*>& unify, \
 		// asio::io_context& scheduler
@@ -667,16 +790,20 @@ namespace request_grammar {
 	template<>
 	struct action<ascii_string<filter::email_lt_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
 		selected_intersection.intersect(ids_sorted_by_email.partition<true>(std::string_view(in.begin(), in.size()), [&](Id id, std::string_view sv) {
-			std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
-			return accounts_by_id[id].email < sv;
+			// std::shared_lock lk(accounts_by_id.corresponding_mutex(id));
+			// return accounts_by_id[id].email < sv;
+			auto [acc] = accounts_by_id.get_and_lock<std::shared_lock>(id);
+			return std::get<0>(acc)->get().email < sv;
 		}));
 	}};
 
 	template<>
 	struct action<ascii_string<filter::email_gt_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
 		selected_intersection.intersect(ids_sorted_by_email.partition<false>(std::string_view(in.begin(), in.size()), [&](Id id, std::string_view sv) {
-			std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
-			return accounts_by_id[id].email < sv;
+			// std::shared_lock lk(accounts_by_id.corresponding_mutex(id));
+			// return accounts_by_id[id].email < sv;
+			auto [acc] = accounts_by_id.get_and_lock<std::shared_lock>(id);
+			return std::get<0>(acc)->get().email < sv;
 		}));
 	}};
 
@@ -853,18 +980,22 @@ namespace request_grammar {
 
 	template<>
 	struct action<nat<filter::birth_lt_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
-		selected_intersection.intersect(ids_sorted_by_birth.partition<true>(parseint::readint<10>(in.begin(), in.size()), [&](uint32_t ts, Id id) {
-			std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
-			return accounts_by_id[id].birth < ts;
+		selected_intersection.intersect(ids_sorted_by_birth.partition<true>(parseint::readint<10>(in.begin(), in.size()), [&](Id id, uint32_t ts) {
+			// std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
+			// return accounts_by_id[id].birth < ts;
+			auto [acc] = accounts_by_id.get_and_lock<std::shared_lock>(id);
+			return std::get<0>(acc)->get().birth < ts;
 		}));
 		fields[Account::print_birth] = true;
 	}};
 
 	template<>
 	struct action<nat<filter::birth_gt_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
-		selected_intersection.intersect(ids_sorted_by_birth.partition<false>(parseint::readint<10>(in.begin(), in.size()), [&](uint32_t ts, Id id) {
-			std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
-			return accounts_by_id[id].birth < ts;
+		selected_intersection.intersect(ids_sorted_by_birth.partition<false>(parseint::readint<10>(in.begin(), in.size()), [&](Id id, uint32_t ts) {
+			// std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
+			// return accounts_by_id[id].birth < ts;
+			auto [acc] = accounts_by_id.get_and_lock<std::shared_lock>(id);
+			return std::get<0>(acc)->get().birth < ts;
 		}));
 		fields[Account::print_birth] = true;
 	}};
@@ -876,8 +1007,10 @@ namespace request_grammar {
 		uint32_t epoch_upper = ((year + 1 - 1970) * 365 + (year + 1 - 1970 + 1) / 4) * 86400;
 
 		selected_intersection.intersect(ids_sorted_by_birth.mid_partition(epoch_lower, epoch_upper, [](Id id, uint32_t ts) {
-			std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
-			return accounts_by_id[id].birth < ts;
+			// std::scoped_lock lk(accounts_by_id.corresponding_mutex(id));
+			// return accounts_by_id[id].birth < ts;
+			auto [acc] = accounts_by_id.get_and_lock<std::shared_lock>(id);
+			return std::get<0>(acc)->get().birth < ts;
 		}));
 		fields[Account::print_birth] = true;
 	}};
@@ -899,9 +1032,12 @@ namespace request_grammar {
 
 	template<>
 	struct action<nat<filter::likes_contains_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
-		Id id = parseint::readint<10>(in.begin(), in.size());
-		std::shared_lock lk(accounts_by_id.corresponding_mutex(id));
-		selected_intersection.intersect(accounts_by_id[id].likers);
+		int likee_id = parseint::readint<10>(in.begin(), in.size());
+		// std::shared_lock lk(accounts_by_id.corresponding_mutex(id));
+		// selected_intersection.intersect(accounts_by_id[id].likers);
+		auto [acc] = accounts_by_id.get_and_lock<std::shared_lock>(likee_id);
+		if (std::get<0>(acc)) selected_intersection.intersect(std::get<0>(acc)->get().likers);
+		else selected_intersection.clear();
 	}};
 
 	template<>
@@ -935,7 +1071,8 @@ namespace request_grammar {
 	struct action<filter::grammar> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
 		std::string body(R"({"accounts":[)");
 		for (auto i = 0; i < limit && i < selected_intersection.size(); ++i) {
-			accounts_by_id[selected_intersection.elements[selected_intersection.size()-i-1]].serialize_to(std::back_inserter(body), fields);
+			auto [acc] = accounts_by_id.get_and_lock<std::shared_lock>(selected_intersection.elements[selected_intersection.size()-i-1]);
+			std::get<0>(acc)->get().serialize_to(std::back_inserter(body), fields);
 			body.push_back(',');
 		}
 		if (selected_intersection.size()) body.pop_back();
@@ -977,6 +1114,12 @@ namespace request_grammar {
 		static void raise(const Input& in, States&&...) { throw bad_uri_exception{}; }
 	};
 
+	template<>
+	struct action<nat<id_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		id = parseint::readint<10>(in.begin(), in.size());
+		if (!accounts_by_id.exists(id)) throw bad_uri_exception{};
+	}};
+
 	struct key_sex : TAO_PEGTL_STRING("sex") {};
 	struct key_status : TAO_PEGTL_STRING("status") {};
 	struct key_interests : TAO_PEGTL_STRING("interests") {};
@@ -1009,7 +1152,6 @@ namespace request_grammar {
 				param<TAO_PEGTL_STRING("interests"), urlescaped_string<interests_tag>>,
 				param<TAO_PEGTL_STRING("joined"), year<joined_tag>>,
 				param<TAO_PEGTL_STRING("keys"), list<key, pegtl::one<','>, keys_tag>>,
-				param<TAO_PEGTL_STRING("query_id"), nat<query_id_tag>>,
 				param<TAO_PEGTL_STRING("limit"), nat<limit_tag>>,
 				param<TAO_PEGTL_STRING("order"), order<order_tag>>,
 				pegtl::must<query_id>
@@ -1115,7 +1257,7 @@ void report() {
 void build_likers() {
 	accounts_by_id.foreach([&](Account& acc) {
 		for (Like like : acc.likes) {
-			accounts_by_id[like.likee].likers.insert(acc.id);
+			acc.likers.insert(acc.id);
 		}
 	});
 }
@@ -1126,10 +1268,92 @@ void test_printing() {
 	});
 }
 
+#include <signal.h>
+#include <memory>
+struct server {
+	size_t port;
+	asio::io_context io_context;
+	asio::io_context worker_context;
+	asio::executor_work_guard<asio::io_context::executor_type> worker_context_guard;
+
+	asio::ip::tcp::acceptor acceptor;
+	asio::signal_set signals;
+	std::vector<std::thread> pool;
+
+	server(size_t port) :
+		signals(io_context, SIGINT, SIGTERM, SIGQUIT),
+		acceptor(io_context, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+		worker_context_guard(asio::make_work_guard(worker_context)),
+		port(port) {}
+
+	void start_accept(std::shared_ptr<asio::ip::tcp::socket> socket_ptr) {
+		acceptor.async_accept(*socket_ptr, [&, socket_ptr](const std::error_code& accept_error) {
+			if (accept_error) {
+				std::cerr << fmt::format("error: {}\n", accept_error);
+				start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
+				return;
+			}
+			std::cerr << "accepted\n";
+
+			auto buf_ptr = std::make_shared<asio::streambuf>();
+			asio::async_read_until(*socket_ptr, *buf_ptr, "\r\n\r\n", [&, socket_ptr, buf_ptr](const std::error_code& read_error, size_t read_bytes) {
+				if (read_error) {
+					std::cerr << fmt::format("error: {}\n", read_error);
+					start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
+					return;
+				}
+
+				auto _something = buf_ptr->data();
+				std::cerr << fmt::format("read: {:s}\n", std::string(asio::buffers_begin(_something), asio::buffers_begin(_something) + read_bytes));
+
+				asio::post(worker_context, [&, socket_ptr, buf_ptr] {
+					namespace pegtl = tao::pegtl;
+					bool use_intersection = false, use_union = false;
+					set<Id> selected_intersection; selected_intersection.universe = true;
+					set<Id> local_union;
+					std::bitset<Account::printable_n> fields;
+					size_t limit = 0;
+					bool keepalive = false;
+					std::string decoded;
+					Id id;
+
+					std::istream is(&*buf_ptr);
+					try {
+						pegtl::parse<pegtl::must<request_grammar::request>, request_grammar::action, request_grammar::control>(pegtl::istream_input(is, read_bytes, ""), selected_intersection, local_union, decoded, fields, limit, *socket_ptr, *buf_ptr, keepalive, id);
+					} catch (const request_grammar::bad_uri_exception&) {
+						asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::not_found));
+					} catch (const request_grammar::bad_request_exception&) {
+						asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::bad_request));
+					}
+					if (keepalive) start_accept(std::move(socket_ptr));
+				});
+			});
+			start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
+		});
+	}
+
+	void stop() {
+		// handle somehow!
+		for (auto& thread : pool) if (thread.joinable()) thread.join();
+	}
+
+	~server() {
+		stop();
+	}
+
+	void run() {
+		signals.async_wait([&](const asio::error_code& error, int signal_number) { std::cerr << fmt::format("interrupt handler: {}\n", signal_number); exit(0); });
+		std::cerr << fmt::format("[+] Listening on port {:d}\n", port);
+		start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
+		for (int i = 0; i < 3; ++i) {
+			pool.emplace_back([&](){ worker_context.run(); });
+		}
+		io_context.run();
+	}
+};
+
 #include <iostream>
 #include <string>
-#include <memory>
-#include <signal.h>
 #include <fstream>
 int main(int argc, char** argv) {
 	using namespace std::literals::string_literals;
@@ -1145,7 +1369,7 @@ int main(int argc, char** argv) {
 		std::cerr << fmt::format("[+] Current timestamp: {:d}\n", current_ts);
 		for (int i = 4; i < argc; ++i) {
 			pegtl::file_input in(argv[i]);
-			std::cerr << fmt::format("\r[.] Parsing file {:d}/{:d}", i - 4, argc - 4);
+			std::cerr << fmt::format("\r[.] Parsing file {:d}/{:d}", i - 4 + 1, argc - 4);
 			pegtl::parse<pegtl::must<account_grammar::file>, account_grammar::action>(in, acc, domain, buffer, like);
 		}
 		std::cerr << fmt::format("\r[+] Parsed successfully     \n");
@@ -1154,45 +1378,9 @@ int main(int argc, char** argv) {
 		build_likers();
 		report();
 
-		asio::io_context context;
 		size_t port = parseint::readint<10>(argv[2], std::strlen(argv[2]));
-		asio::ip::tcp::acceptor acceptor(context, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port));
-		asio::signal_set signals(context, SIGINT, SIGTERM, SIGQUIT);
-		signals.async_wait([&](const asio::error_code& error, int signal_number) { std::cerr << fmt::format("interrupt handler: {}\n", signal_number); context.stop(); });
 
-		std::function<void(std::unique_ptr<asio::ip::tcp::socket>)> start_accept = [&](std::unique_ptr<asio::ip::tcp::socket> socket_ptr) {
-			asio::ip::tcp::socket& socket = *socket_ptr;
-			acceptor.async_accept(socket, [&, socket = std::move(socket_ptr)](const std::error_code& error) {
-				std::cerr << "accepted\n";
-				bool use_intersection = false, use_union = false;
-				set<Id> selected_intersection; selected_intersection.universe = true;
-				set<Id> local_union;
-				std::bitset<Account::printable_n> fields;
-				size_t limit = 0;
-				bool keepalive = false;
-				std::string decoded;
-
-				asio::streambuf buf;
-				asio::read_until(*socket, buf, "\r\n\r\n");
-				std::istream is(&buf);
-				try {
-					pegtl::parse<pegtl::must<request_grammar::request>, request_grammar::action, request_grammar::control>(pegtl::istream_input(is, buf.size(), ""), selected_intersection, local_union, decoded, fields, limit, *socket, buf, keepalive);
-				} catch (const request_grammar::bad_uri_exception&) {
-					asio::write(*socket, asio::buffer(request_grammar::http_prefix::not_found));
-				} catch (const request_grammar::bad_request_exception&) {
-					asio::write(*socket, asio::buffer(request_grammar::http_prefix::bad_request));
-				}
-				if (keepalive) start_accept(std::move(socket_ptr));
-				else start_accept(std::make_unique<asio::ip::tcp::socket>(context));
-			});
-		};
-		std::vector<std::thread> pool;
-
-		std::cerr << fmt::format("[+] Listening on port {:d}\n", port);
-		start_accept(std::make_unique<asio::ip::tcp::socket>(context));
-		for (int i = 0; i < 3; ++i) {
-			pool.emplace_back([&](){ context.run(); });
-		}
-		for (int i = 0; i < 3; ++i) if (pool[i].joinable()) pool[i].join();
+		server s(port);
+		s.run();
 	}
 }
