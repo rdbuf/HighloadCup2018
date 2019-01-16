@@ -22,3 +22,6 @@
 [submodule "third-party/asio"]
 	path = third-party/asio
 	url = https://github.com/chriskohlhoff/asio.git
+[submodule "third-party/config"]
+	path = third-party/config
+	url = https://github.com/boostorg/config.git
