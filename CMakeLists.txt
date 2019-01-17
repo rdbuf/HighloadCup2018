@@ -37,3 +37,5 @@ target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_SOURCE_DIR}/third-par
 target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_SOURCE_DIR}/third-party/asio/asio/include)
 target_include_directories(HighloadCup2018 PRIVATE ${CMAKE_SOURCE_DIR}/third-party/config/include)
 target_link_libraries(HighloadCup2018 PRIVATE -lpthread)
+
+target_link_libraries(HighloadCup2018 PRIVATE profiler tcmalloc)

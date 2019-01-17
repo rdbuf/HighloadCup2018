@@ -135,8 +135,8 @@ struct AccountsStore {
 		}
 	}
 
-	template<size_t... I>
-	void get_and_lock_lock_helper(auto& result, std::index_sequence<I...>) {
+	template<class triplet, size_t... I>
+	void get_and_lock_lock_helper(std::array<triplet, sizeof...(I)>& result, std::index_sequence<I...>) {
 		static_assert(sizeof...(I) > 0, "must specify at least one id");
 		if constexpr (sizeof...(I) > 1) {
 			std::lock(std::get<1>(std::get<I>(result))...);
@@ -212,6 +212,8 @@ std::array<set<Id>, 3> ids_by_status;
 std::shared_mutex ids_by_status_mutex;
 tsl::array_map<char, set<Id>> ids_by_fname;
 std::shared_mutex ids_by_fname_mutex;
+std::array<set<Id>, 2> ids_by_fname_presence;
+std::shared_mutex ids_by_fname_presence_mutex;
 tsl::htrie_map<char, set<Id>> ids_by_sname;
 std::shared_mutex ids_by_sname_mutex;
 enum { absent, present };
@@ -573,6 +575,7 @@ namespace account_grammar {
 			ids_by_sname[snames[*acc_ref.sname_idx]].insert(id);
 		}
 		ids_by_sname_presence[acc_ref.sname_idx.has_value()].insert(id);
+		ids_by_fname_presence[acc_ref.fname_idx.has_value()].insert(id);
 		if (acc_ref.phone) {
 			ids_by_code[acc_ref.phone->code].insert(id);
 			existing_phones.insert(*acc_ref.phone);
@@ -671,14 +674,10 @@ namespace request_grammar {
 			"{}";
 		constexpr const char bad_request[] =
 			"HTTP/1.1 400 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: 0\r\n";
+			"Connection: keep-alive\r\n";
 		constexpr const char not_found[] =
 			"HTTP/1.1 404 \r\n"
-			"Content-Type: application/json\r\n"
-			"Connection: keep-alive\r\n"
-			"Content-Length: 0\r\n";
+			"Connection: keep-alive\r\n";
 	}
 
 	// 1. We get a request, parse it, and go to the appropriate handler
@@ -696,7 +695,8 @@ namespace request_grammar {
 		asio::ip::tcp::socket& socket, \
 		asio::streambuf& buf, \
 		bool& keepalive, \
-		Id id
+		Id id, \
+		std::array<asio::const_buffer, 4>& buffers
 		// std::vector<set<Id>*>& intersect, \
 		// std::vector<set<Id>*>& unify, \
 		// asio::io_context& scheduler
@@ -716,6 +716,9 @@ namespace request_grammar {
 		struct email_gt_tag {};
 		struct status_eq_tag {};
 		struct status_neq_tag {};
+		struct fname_eq_tag {};
+		struct fname_any_tag {};
+		struct fname_null_tag {};
 		struct sname_eq_tag {};
 		struct sname_starts_tag {};
 		struct sname_null_tag {};
@@ -743,10 +746,13 @@ namespace request_grammar {
 			param<TAO_PEGTL_STRING("email_gt"), ascii_string<email_gt_tag>>,
 			param<TAO_PEGTL_STRING("status_eq"), status<status_eq_tag>>,
 			param<TAO_PEGTL_STRING("status_neq"), status<status_neq_tag>>,
+			param<TAO_PEGTL_STRING("fname_eq"), urlescaped_string<fname_eq_tag>>,
+			param<TAO_PEGTL_STRING("fname_any"), list<urlescaped_string, TAO_PEGTL_ISTRING("%2C"), filter::fname_any_tag>>,
+			param<TAO_PEGTL_STRING("fname_null"), boolean<fname_null_tag>>,
+			param<TAO_PEGTL_STRING("phone_code"), nat<phone_code_tag>>,
 			param<TAO_PEGTL_STRING("sname_eq"), urlescaped_string<sname_eq_tag>>,
 			param<TAO_PEGTL_STRING("sname_starts"), urlescaped_string<sname_starts_tag>>,
 			param<TAO_PEGTL_STRING("sname_null"), boolean<sname_null_tag>>,
-			param<TAO_PEGTL_STRING("phone_code"), nat<phone_code_tag>>,
 			param<TAO_PEGTL_STRING("phone_null"), boolean<phone_null_tag>>,
 			param<TAO_PEGTL_STRING("country_eq"), urlescaped_string<country_eq_tag>>,
 			param<TAO_PEGTL_STRING("country_null"), boolean<country_null_tag>>,
@@ -870,6 +876,42 @@ namespace request_grammar {
 	}};
 
 	template<>
+	struct action<urlescaped_string<filter::fname_eq_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		std::shared_lock lk(ids_by_sname_mutex);
+		if (auto it = ids_by_fname.find(decoded); it != ids_by_fname.end()) {
+			selected_intersection.intersect(*it);
+		} else selected_intersection.clear();
+		decoded.clear();
+		fields[Account::print_fname] = true;
+	}};
+
+
+	template<>
+	struct action<urlescaped_string<filter::fname_any_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		std::shared_lock lk(ids_by_fname_mutex);
+		if (auto it = ids_by_fname.find(decoded); it != ids_by_fname.end()) local_union.unite(*it);
+		decoded.clear();
+	}};
+
+	template<>
+	struct action<list<urlescaped_string, TAO_PEGTL_ISTRING("%2C"), filter::fname_any_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		fields[Account::print_fname] = true;
+		selected_intersection.intersect(local_union);
+		local_union.clear();
+	}};
+
+	template<>
+	struct action<boolean_true<filter::fname_null_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		selected_intersection.intersect(ids_by_fname_presence[absent]);
+	}};
+
+	template<>
+	struct action<boolean_false<filter::fname_null_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+		selected_intersection.intersect(ids_by_fname_presence[present]);
+		fields[Account::print_fname] = true;
+	}};
+
+	template<>
 	struct action<urlescaped_string<filter::sname_eq_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
 		std::shared_lock lk(ids_by_sname_mutex);
 		if (auto it = ids_by_sname.find(decoded); it != ids_by_sname.end()) {
@@ -963,7 +1005,7 @@ namespace request_grammar {
 	}};
 
 	template<>
-	struct action<list<urlescaped_string, pegtl::one<','>, filter::city_any_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
+	struct action<list<urlescaped_string, TAO_PEGTL_ISTRING("%2C"), filter::city_any_tag>> { template<class Input> static void apply(const Input& in, ACTION_ARGS) {
 		fields[Account::print_city] = true;
 		selected_intersection.intersect(local_union);
 		local_union.clear();
@@ -1079,13 +1121,14 @@ namespace request_grammar {
 		}
 		if (selected_intersection.size()) body.pop_back();
 		body += "]}";
-		std::vector<asio::const_buffer> buffers({
+		std::cerr << fmt::format("body length: {}\n", body.length());
+		buffers = std::array<asio::const_buffer, 4>{
 			asio::buffer(http_prefix::ok, sizeof(http_prefix::ok) - 1),
 			asio::buffer(std::to_string(body.length())),
 			asio::buffer("\r\n\r\n", 4),
 			asio::buffer(body)
-		});
-		asio::write(socket, buffers);
+		};
+		// asio::write(socket, buffers);
 	}};
 
 	struct bad_uri_exception {};
@@ -1270,6 +1313,7 @@ void test_printing() {
 	});
 }
 
+/*
 #include <signal.h>
 #include <memory>
 struct server {
@@ -1288,11 +1332,17 @@ struct server {
 		worker_context_guard(asio::make_work_guard(worker_context)),
 		port(port) {}
 
+	// what we have now:
+	// on each connection even reused one a new socket gets created
+	// what we need:
+	// create new socket only after one gets used
+
+	template<bool reuse = false>
 	void start_accept(std::shared_ptr<asio::ip::tcp::socket> socket_ptr) {
 		acceptor.async_accept(*socket_ptr, [&, socket_ptr](const std::error_code& accept_error) {
 			if (accept_error) {
 				std::cerr << fmt::format("error: {}\n", accept_error);
-				start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
+				if constexpr (!reuse) start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
 				return;
 			}
 			std::cerr << "accepted\n";
@@ -1300,8 +1350,7 @@ struct server {
 			auto buf_ptr = std::make_shared<asio::streambuf>();
 			asio::async_read_until(*socket_ptr, *buf_ptr, "\r\n\r\n", [&, socket_ptr, buf_ptr](const std::error_code& read_error, size_t read_bytes) {
 				if (read_error) {
-					std::cerr << fmt::format("error: {}\n", read_error);
-					start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
+					std::cerr << fmt::format("read error: {}\n", read_error);
 					return;
 				}
 
@@ -1318,19 +1367,36 @@ struct server {
 					bool keepalive = false;
 					std::string decoded;
 					Id id;
+					std::array<asio::const_buffer, 4> buffers;
 
 					std::istream is(&*buf_ptr);
 					try {
-						pegtl::parse<pegtl::must<request_grammar::request>, request_grammar::action, request_grammar::control>(pegtl::istream_input(is, read_bytes, ""), selected_intersection, local_union, decoded, fields, limit, *socket_ptr, *buf_ptr, keepalive, id);
+						pegtl::parse<pegtl::must<request_grammar::request>, request_grammar::action, request_grammar::control>(pegtl::istream_input(is, read_bytes, ""), selected_intersection, local_union, decoded, fields, limit, *socket_ptr, *buf_ptr, keepalive, id, buffers);
 					} catch (const request_grammar::bad_uri_exception&) {
-						asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::not_found));
+						try {
+							asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::not_found, sizeof(request_grammar::http_prefix::not_found) - 1));
+						} catch (const std::system_error& e) {
+							std::cerr << "system_error: " << e.what() << "\n";
+						}
+						return;
 					} catch (const request_grammar::bad_request_exception&) {
-						asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::bad_request));
+						try {
+							asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::bad_request, sizeof(request_grammar::http_prefix::bad_request) - 1));
+						} catch (const std::system_error& e) {
+							std::cerr << "system_error: " << e.what() << "\n";
+						}
+						return;
 					}
-					if (keepalive) start_accept(std::move(socket_ptr));
+					try {
+						asio::write(*socket_ptr, buffers);
+					} catch (const std::system_error& e) {
+						std::cerr << "system_error: " << e.what() << "\n";
+						return;
+					}
+					if (keepalive) start_accept<true>(std::move(socket_ptr));
 				});
 			});
-			start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
+			if constexpr (!reuse) start_accept(std::make_shared<asio::ip::tcp::socket>(io_context));
 		});
 	}
 
@@ -1351,6 +1417,109 @@ struct server {
 			pool.emplace_back([&](){ worker_context.run(); });
 		}
 		io_context.run();
+	}
+};
+*/
+
+#include <signal.h>
+#include <memory>
+struct server {
+	size_t port;
+	asio::io_context context;
+	asio::executor_work_guard<asio::io_context::executor_type> context_guard;
+
+	asio::ip::tcp::acceptor acceptor;
+	asio::signal_set signals;
+	std::vector<std::thread> pool;
+
+	server(size_t port) :
+		signals(context, SIGINT, SIGTERM, SIGQUIT),
+		acceptor(context, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+		context_guard(asio::make_work_guard(context)),
+		port(port) {}
+
+	// what we have now:
+	// on each connection even reused one a new socket gets created
+	// what we need:
+	// create new socket only after one gets used
+
+	template<bool reuse = false>
+	void start_accept(std::shared_ptr<asio::ip::tcp::socket> socket_ptr) {
+		acceptor.async_accept(*socket_ptr, [&, socket_ptr](const std::error_code& accept_error) {
+			if (accept_error) {
+				std::cerr << fmt::format("error: {}\n", accept_error);
+				if constexpr (!reuse) start_accept(std::make_shared<asio::ip::tcp::socket>(context));
+				return;
+			}
+			std::cerr << "accepted\n";
+
+			auto buf_ptr = std::make_shared<asio::streambuf>();
+			asio::async_read_until(*socket_ptr, *buf_ptr, "\r\n\r\n", [&, socket_ptr, buf_ptr](const std::error_code& read_error, size_t read_bytes) {
+				if (read_error) {
+					std::cerr << fmt::format("read error: {}\n", read_error);
+					return;
+				}
+
+				auto _something = buf_ptr->data();
+				std::cerr << fmt::format("read: {:s}\n", std::string(asio::buffers_begin(_something), asio::buffers_begin(_something) + read_bytes));
+
+				namespace pegtl = tao::pegtl;
+				bool use_intersection = false, use_union = false;
+				set<Id> selected_intersection; selected_intersection.universe = true;
+				set<Id> local_union;
+				std::bitset<Account::printable_n> fields;
+				size_t limit = 0;
+				bool keepalive = false;
+				std::string decoded;
+				Id id;
+				std::array<asio::const_buffer, 4> buffers;
+
+				std::istream is(&*buf_ptr);
+				try {
+					pegtl::parse<pegtl::must<request_grammar::request>, request_grammar::action, request_grammar::control>(pegtl::istream_input(is, read_bytes, ""), selected_intersection, local_union, decoded, fields, limit, *socket_ptr, *buf_ptr, keepalive, id, buffers);
+				} catch (const request_grammar::bad_uri_exception&) {
+					try {
+						asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::not_found, sizeof(request_grammar::http_prefix::not_found) - 1));
+					} catch (const std::system_error& e) {
+						std::cerr << "system_error: " << e.what() << "\n";
+					}
+					return;
+				} catch (const request_grammar::bad_request_exception&) {
+					try {
+						asio::write(*socket_ptr, asio::buffer(request_grammar::http_prefix::bad_request, sizeof(request_grammar::http_prefix::bad_request) - 1));
+					} catch (const std::system_error& e) {
+						std::cerr << "system_error: " << e.what() << "\n";
+					}
+					return;
+				}
+				try {
+					asio::write(*socket_ptr, buffers);
+				} catch (const std::system_error& e) {
+					std::cerr << "system_error: " << e.what() << "\n";
+					return;
+				}
+				if (keepalive) start_accept<true>(std::move(socket_ptr));
+			});
+			if constexpr (!reuse) start_accept(std::make_shared<asio::ip::tcp::socket>(context));
+		});
+	}
+
+	void stop() {
+		// handle somehow!
+		for (auto& thread : pool) if (thread.joinable()) thread.join();
+	}
+
+	~server() {
+		stop();
+	}
+
+	void run() {
+		signals.async_wait([&](const asio::error_code& error, int signal_number) { std::cerr << fmt::format("interrupt handler: {}\n", signal_number); exit(0); });
+		std::cerr << fmt::format("[+] Listening on port {:d}\n", port);
+		start_accept(std::make_shared<asio::ip::tcp::socket>(context));
+		for (int i = 0; i < 3; ++i) {
+			pool.emplace_back([&](){ context.run(); });
+		}
 	}
 };
 

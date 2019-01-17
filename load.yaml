@@ -1,9 +1,10 @@
 phantom:
-  address: 127.0.0.1:8091
+  address: 127.0.0.1:8089
   ammofile: ./test_accounts_291218/ammo/phase_1_get.ammo
+  writelog: all
   load_profile:
     load_type: rps
-    schedule: const(1,90s)
+    schedule: line(0,1000,30s)
   connection_test: false
   chosen_cases: "GET:/accounts/filter/"
   # uris:
@@ -12,3 +13,7 @@ console:
   enabled: true
 telegraf:
   enabled: false
+overload:
+  enabled: true
+  package: yandextank.plugins.DataUploader
+  token_file: "token.txt"
